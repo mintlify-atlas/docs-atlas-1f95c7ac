@@ -1,0 +1,127 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "1inch Cross-Chain SDK",
+  "projectDescription": "TypeScript SDK for creating atomic cross-chain swaps through the 1inch Fusion+ protocol",
+  "theme": "aspen",
+  "primaryColor": "#1b314f",
+  "lightColor": "#2e5c8a",
+  "darkColor": "#0d1a2d",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/atomic-swaps",
+              "concepts/hash-locks",
+              "concepts/orders",
+              "concepts/presets"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/evm-to-evm",
+              "guides/evm-to-solana",
+              "guides/solana-to-evm",
+              "guides/native-assets",
+              "guides/integrator-fees",
+              "guides/websocket-api",
+              "guides/order-management"
+            ]
+          },
+          {
+            "group": "Migration",
+            "pages": [
+              "migration/v2-migration-guide"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/sdk",
+              "api/quote",
+              "api/hash-lock"
+            ]
+          },
+          {
+            "group": "Orders",
+            "pages": [
+              "api/evm-order",
+              "api/solana-order",
+              "api/order-status"
+            ]
+          },
+          {
+            "group": "Blockchain",
+            "pages": [
+              "api/addresses",
+              "api/chains",
+              "api/connectors"
+            ]
+          },
+          {
+            "group": "Contracts",
+            "pages": [
+              "api/escrow-factories",
+              "api/native-orders"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/types",
+              "api/utilities"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Cross-chain atomic swaps between EVM chains and Solana",
+    "Quote generation and order estimation",
+    "Secret-based hash lock mechanism for trustless swaps",
+    "WebSocket API for real-time order monitoring",
+    "Integrator fee support",
+    "Native asset swap support",
+    "Multi-chain support (Ethereum, Polygon, BSC, Avalanche, Solana, etc.)"
+  ],
+  "publicApiSurface": [
+    "SDK",
+    "Quote",
+    "HashLock",
+    "EvmCrossChainOrder",
+    "SvmCrossChainOrder",
+    "PrivateKeyProviderConnector",
+    "Web3ProviderConnector",
+    "EvmAddress",
+    "SolanaAddress",
+    "NetworkEnum",
+    "OrderStatus",
+    "PresetEnum",
+    "NativeOrdersFactory",
+    "SvmSrcEscrowFactory",
+    "getQuote",
+    "createOrder",
+    "submitOrder",
+    "submitSecret",
+    "getOrderStatus",
+    "getReadyToAcceptSecretFills"
+  ]
+}
