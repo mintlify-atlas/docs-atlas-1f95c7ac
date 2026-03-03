@@ -1,0 +1,526 @@
+---
+title: 'Order Management'
+description: 'Track order status, submit secrets, and manage cross-chain swaps'
+---
+
+## Overview
+
+The SDK provides comprehensive methods for managing cross-chain orders throughout their lifecycle, from status tracking to secret submission and cancellation.
+
+## Order Status Tracking
+
+### Get Order Status
+
+Retrieve the current status and details of an order:
+
+```typescript
+import { SDK, OrderStatus } from '@1inch/cross-chain-sdk'
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: 'your-auth-key'
+})
+
+const orderHash = '0x...'
+const statusResponse = await sdk.getOrderStatus(orderHash)
+
+console.log('Status:', statusResponse.status)
+console.log('Fills:', statusResponse.fills)
+console.log('Created at:', statusResponse.createdAt)
+```
+
+### Order Status Values
+
+```typescript
+enum OrderStatus {
+    Pending = 'pending',
+    Executed = 'executed',
+    Expired = 'expired',
+    Refunded = 'refunded',
+    Cancelled = 'cancelled'
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| `Pending` | Order submitted, waiting for execution |
+| `Executed` | Successfully completed |
+| `Expired` | Order expired before execution |
+| `Refunded` | Funds returned to maker |
+| `Cancelled` | Cancelled by maker |
+
+### Monitor Until Completion
+
+```typescript
+import { OrderStatus } from '@1inch/cross-chain-sdk'
+
+async function waitForCompletion(orderHash: string): Promise<void> {
+    while (true) {
+        const { status } = await sdk.getOrderStatus(orderHash)
+
+        console.log('Current status:', status)
+
+        if (
+            status === OrderStatus.Executed ||
+            status === OrderStatus.Expired ||
+            status === OrderStatus.Refunded ||
+            status === OrderStatus.Cancelled
+        ) {
+            console.log('Order finalized with status:', status)
+            break
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 5000))
+    }
+}
+
+await waitForCompletion(orderHash)
+```
+
+<Tip>
+Poll every 3-5 seconds to balance responsiveness and API rate limits.
+</Tip>
+
+## Secret Management
+
+### Get Ready to Accept Secret Fills
+
+Check which secrets are ready to be submitted:
+
+```typescript
+const readyFills = await sdk.getReadyToAcceptSecretFills(orderHash)
+
+console.log('Ready fills:', readyFills.fills)
+
+for (const fill of readyFills.fills) {
+    console.log(`Fill ${fill.idx} is ready for secret submission`)
+}
+```
+
+### Submit Secret
+
+Submit a secret to unlock escrow funds:
+
+```typescript
+const secret = '0x...' // The secret generated during order creation
+
+await sdk.submitSecret(orderHash, secret)
+
+console.log('Secret submitted successfully')
+```
+
+<Warning>
+**Security Critical**: Before submitting secrets, verify:
+
+1. Escrow contracts are deployed on correct chains
+2. Token amounts match expected values
+3. Escrow addresses are legitimate
+4. Both source and destination escrows exist
+
+Never share secrets without validation!
+</Warning>
+
+### Complete Secret Submission Flow
+
+```typescript
+const secrets = ['0x...', '0x...'] // Secrets from order creation
+const alreadyShared = new Set<number>()
+
+while (true) {
+    const readyFills = await sdk.getReadyToAcceptSecretFills(orderHash)
+
+    for (const fill of readyFills.fills) {
+        if (!alreadyShared.has(fill.idx)) {
+            // Verify escrow before sharing (production requirement)
+            const isValid = await verifyEscrow(orderHash, fill.idx)
+            
+            if (!isValid) {
+                console.error(`Escrow validation failed for fill ${fill.idx}`)
+                continue
+            }
+
+            await sdk.submitSecret(orderHash, secrets[fill.idx])
+            alreadyShared.add(fill.idx)
+            
+            console.log(`Shared secret ${fill.idx}`)
+        }
+    }
+
+    const { status } = await sdk.getOrderStatus(orderHash)
+
+    if (
+        status === OrderStatus.Executed ||
+        status === OrderStatus.Expired ||
+        status === OrderStatus.Refunded
+    ) {
+        break
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 3000))
+}
+```
+
+### Get Published Secrets
+
+Retrieve secrets that have already been submitted:
+
+```typescript
+const publishedSecrets = await sdk.getPublishedSecrets(orderHash)
+
+console.log('Published secrets:', publishedSecrets.secrets)
+```
+
+## Active Orders
+
+### Get All Active Orders
+
+Retrieve currently active orders across all chains:
+
+```typescript
+const activeOrders = await sdk.getActiveOrders({
+    page: 1,
+    limit: 100
+})
+
+console.log('Total active orders:', activeOrders.meta.totalItems)
+console.log('Orders:', activeOrders.items)
+
+for (const order of activeOrders.items) {
+    console.log(`Order ${order.orderHash}: ${order.status}`)
+}
+```
+
+### Get Orders by Maker
+
+Retrieve orders for a specific wallet address:
+
+```typescript
+const makerOrders = await sdk.getOrdersByMaker({
+    address: '0xYourWalletAddress',
+    page: 1,
+    limit: 50
+})
+
+console.log('Orders by maker:', makerOrders.items)
+```
+
+### Pagination
+
+```typescript
+let page = 1
+const limit = 100
+let hasMore = true
+
+while (hasMore) {
+    const response = await sdk.getActiveOrders({ page, limit })
+    
+    console.log(`Page ${page}: ${response.items.length} orders`)
+    
+    // Process orders
+    response.items.forEach(order => {
+        console.log(order.orderHash)
+    })
+    
+    hasMore = page * limit < response.meta.totalItems
+    page++
+}
+```
+
+## Order Cancellation
+
+### Build Cancel Order Call Data (EVM)
+
+For orders on EVM chains, get the transaction data for cancellation:
+
+```typescript
+const orderHash = '0x...'
+
+try {
+    const cancelCallData = await sdk.buildCancelOrderCallData(orderHash)
+    
+    console.log('Cancel call data:', cancelCallData)
+    
+    // Use this data to send a cancellation transaction
+    // via your wallet provider
+} catch (error) {
+    console.error('Failed to build cancel data:', error)
+}
+```
+
+<Warning>
+`buildCancelOrderCallData()` only works for orders with EVM source chains. For Solana orders, use different cancellation mechanisms.
+</Warning>
+
+### Execute Cancellation
+
+```typescript
+import { ethers } from 'ethers'
+
+const wallet = new ethers.Wallet(privateKey, provider)
+const cancelData = await sdk.buildCancelOrderCallData(orderHash)
+
+// Get the order details to find the contract address
+const orderStatus = await sdk.getOrderStatus(orderHash)
+
+// Send cancellation transaction
+const tx = await wallet.sendTransaction({
+    to: orderStatus.order.maker, // or appropriate contract address
+    data: cancelData,
+    gasLimit: 200000
+})
+
+await tx.wait()
+
+console.log('Order cancelled:', tx.hash)
+```
+
+### Get Cancellable Orders
+
+Retrieve orders that can be cancelled by resolvers:
+
+```typescript
+import { ChainType, ApiVersion } from '@1inch/cross-chain-sdk'
+
+// Get cancellable EVM orders
+const evmCancellable = await sdk.getCancellableOrders(
+    ChainType.EVM,
+    1, // page
+    100, // limit
+    [ApiVersion.V1, ApiVersion.V2] // optional version filter
+)
+
+for (const order of evmCancellable.items) {
+    console.log('Cancellable order:', order.orderHash)
+    console.log('Remaining amount:', order.remainingMakerAmount)
+}
+
+// Get cancellable Solana orders
+const svmCancellable = await sdk.getCancellableOrders(
+    ChainType.SVM,
+    1,
+    100
+)
+
+for (const order of svmCancellable.items) {
+    console.log('Cancellable Solana order:', order.orderHash)
+    console.log('Premium:', order.cancellationConfig.maxCancellationPremium)
+}
+```
+
+## Ready to Execute Public Actions
+
+Get orders ready for public execution:
+
+```typescript
+import { ApiVersion } from '@1inch/cross-chain-sdk'
+
+const readyActions = await sdk.getReadyToExecutePublicActions({
+    version: [ApiVersion.V2]
+})
+
+console.log('Orders ready for execution:', readyActions)
+```
+
+## Complete Order Lifecycle Example
+
+```typescript
+import {
+    SDK,
+    HashLock,
+    NetworkEnum,
+    OrderStatus,
+    PresetEnum,
+    PrivateKeyProviderConnector
+} from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+import { randomBytes } from 'crypto'
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: 'your-auth-key',
+    blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+})
+
+async function executeSwap() {
+    // 1. Get quote
+    const quote = await sdk.getQuote({
+        amount: '10000000',
+        srcChainId: NetworkEnum.POLYGON,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true,
+        srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+        dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        walletAddress
+    })
+
+    // 2. Generate secrets
+    const preset = PresetEnum.fast
+    const secrets = Array.from({
+        length: quote.presets[preset].secretsCount
+    }).map(() => '0x' + randomBytes(32).toString('hex'))
+
+    const hashLock = secrets.length === 1
+        ? HashLock.forSingleFill(secrets[0])
+        : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+    const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+
+    // 3. Create and submit order
+    const { hash, quoteId, order } = await sdk.createOrder(quote, {
+        walletAddress,
+        hashLock,
+        preset,
+        source: 'my-app',
+        secretHashes
+    })
+
+    await sdk.submitOrder(quote.srcChainId, order, quoteId, secretHashes)
+    console.log('Order submitted:', hash)
+
+    // 4. Monitor and manage
+    const alreadyShared = new Set<number>()
+
+    while (true) {
+        // Check status
+        const statusResponse = await sdk.getOrderStatus(hash)
+        console.log('Status:', statusResponse.status)
+
+        // Check for ready secrets
+        const readyFills = await sdk.getReadyToAcceptSecretFills(hash)
+
+        for (const fill of readyFills.fills) {
+            if (!alreadyShared.has(fill.idx)) {
+                await sdk.submitSecret(hash, secrets[fill.idx])
+                alreadyShared.add(fill.idx)
+                console.log(`Shared secret ${fill.idx}`)
+            }
+        }
+
+        // Check if finalized
+        if (
+            statusResponse.status === OrderStatus.Executed ||
+            statusResponse.status === OrderStatus.Expired ||
+            statusResponse.status === OrderStatus.Refunded
+        ) {
+            console.log('Final status:', statusResponse.status)
+            break
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 3000))
+    }
+
+    // 5. Get final details
+    const finalStatus = await sdk.getOrderStatus(hash)
+    console.log('Order complete:', finalStatus)
+}
+
+executeSwap()
+```
+
+## Error Handling
+
+```typescript
+try {
+    const status = await sdk.getOrderStatus(orderHash)
+    console.log('Status:', status)
+} catch (error) {
+    if (error.response?.status === 404) {
+        console.error('Order not found')
+    } else if (error.response?.status === 429) {
+        console.error('Rate limit exceeded')
+        // Implement backoff
+    } else {
+        console.error('Failed to get order status:', error.message)
+    }
+}
+
+// Secret submission with retry
+async function submitSecretWithRetry(
+    orderHash: string,
+    secret: string,
+    maxRetries = 3
+): Promise<void> {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            await sdk.submitSecret(orderHash, secret)
+            return
+        } catch (error) {
+            console.error(`Attempt ${i + 1} failed:`, error.message)
+            if (i === maxRetries - 1) throw error
+            await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)))
+        }
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Validate Before Sharing Secrets">
+    ```typescript
+    async function validateEscrow(orderHash: string, fillIdx: number): Promise<boolean> {
+        // Implement escrow validation logic
+        // Check contract addresses, balances, etc.
+        return true
+    }
+
+    const readyFills = await sdk.getReadyToAcceptSecretFills(orderHash)
+    for (const fill of readyFills.fills) {
+        if (await validateEscrow(orderHash, fill.idx)) {
+            await sdk.submitSecret(orderHash, secrets[fill.idx])
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Implement Exponential Backoff">
+    ```typescript
+    async function pollWithBackoff(orderHash: string): Promise<void> {
+        let delay = 1000
+        const maxDelay = 30000
+
+        while (true) {
+            const { status } = await sdk.getOrderStatus(orderHash)
+            
+            if (status !== OrderStatus.Pending) break
+
+            await new Promise(resolve => setTimeout(resolve, delay))
+            delay = Math.min(delay * 1.5, maxDelay)
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Track Submitted Secrets">
+    ```typescript
+    const submittedSecrets = new Set<number>()
+    
+    // Prevents duplicate submissions
+    if (!submittedSecrets.has(fillIdx)) {
+        await sdk.submitSecret(orderHash, secret)
+        submittedSecrets.add(fillIdx)
+    }
+    ```
+  </Step>
+
+  <Step title="Handle All Terminal States">
+    ```typescript
+    const terminalStates = [
+        OrderStatus.Executed,
+        OrderStatus.Expired,
+        OrderStatus.Refunded,
+        OrderStatus.Cancelled
+    ]
+
+    if (terminalStates.includes(status)) {
+        // Handle completion
+    }
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+- Use [WebSocket API](/guides/websocket-api) for real-time order monitoring
+- Learn about [EVM to EVM Swaps](/guides/evm-to-evm) for order creation
+- Explore [Integrator Fees](/guides/integrator-fees) for monetization

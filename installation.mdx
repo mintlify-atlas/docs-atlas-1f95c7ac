@@ -1,0 +1,288 @@
+---
+title: Installation
+description: Install and configure the 1inch Cross-Chain SDK in your project
+---
+
+## Prerequisites
+
+Before installing the SDK, ensure you have:
+
+- **Node.js**: Version 18.16.0 or higher
+- **Package Manager**: npm, yarn, or pnpm
+- **1inch Developer Portal API Key**: Get yours at [portal.1inch.dev](https://portal.1inch.dev)
+
+<Note>
+The SDK requires Node.js 18.16.0 or higher. Check your version with `node --version`.
+</Note>
+
+## Install the Package
+
+Install the `@1inch/cross-chain-sdk` package using your preferred package manager:
+
+<CodeGroup>
+
+```bash npm
+npm install @1inch/cross-chain-sdk
+```
+
+```bash yarn
+yarn add @1inch/cross-chain-sdk
+```
+
+```bash pnpm
+pnpm add @1inch/cross-chain-sdk
+```
+
+</CodeGroup>
+
+## Install Peer Dependencies
+
+Depending on your use case, you may need additional packages:
+
+### For EVM Chains
+
+If you're working with EVM chains, you'll need a Web3 library:
+
+<CodeGroup>
+
+```bash web3.js
+npm install web3
+```
+
+```bash ethers.js
+npm install ethers
+```
+
+</CodeGroup>
+
+### For Solana
+
+For Solana integration, install the Anchor and Solana dependencies:
+
+<CodeGroup>
+
+```bash npm
+npm install @coral-xyz/anchor @solana/web3.js
+```
+
+```bash yarn
+yarn add @coral-xyz/anchor @solana/web3.js
+```
+
+```bash pnpm
+pnpm add @coral-xyz/anchor @solana/web3.js
+```
+
+</CodeGroup>
+
+## Get Your API Key
+
+The SDK requires an authentication key from the 1inch Developer Portal:
+
+<Steps>
+  <Step title="Visit the Developer Portal">
+    Navigate to [portal.1inch.dev](https://portal.1inch.dev) and sign in or create an account.
+  </Step>
+  <Step title="Create an API Key">
+    In your dashboard, create a new API key for the Fusion+ API.
+  </Step>
+  <Step title="Copy the Key">
+    Save your API key securely - you'll need it to initialize the SDK.
+  </Step>
+</Steps>
+
+<Warning>
+Never commit your API key to version control. Use environment variables to store sensitive credentials.
+</Warning>
+
+## Environment Setup
+
+Create a `.env` file in your project root to store your configuration:
+
+```bash .env
+# 1inch API Configuration
+DEV_PORTAL_API_TOKEN=your_api_key_here
+
+# Wallet Configuration (for order creation)
+PRIVATE_KEY=0x...
+
+# RPC Endpoints
+ETHEREUM_RPC=https://ethereum-rpc.publicnode.com
+POLYGON_RPC=https://polygon-rpc.publicnode.com
+BSC_RPC=https://bsc-rpc.publicnode.com
+
+# Optional: Solana Configuration
+SOLANA_RPC=https://api.mainnet-beta.solana.com
+SOLANA_PRIVATE_KEY=base58_encoded_private_key
+```
+
+<Tip>
+Use [dotenv](https://www.npmjs.com/package/dotenv) to load environment variables in your application:
+
+```bash
+npm install dotenv
+```
+
+Then in your code:
+
+```typescript
+import 'dotenv/config'
+```
+</Tip>
+
+## Basic SDK Initialization
+
+Here's how to initialize the SDK with minimal configuration:
+
+### Read-Only Setup (Quotes Only)
+
+If you only need to fetch quotes without creating orders:
+
+```typescript
+import { SDK } from '@1inch/cross-chain-sdk'
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: process.env.DEV_PORTAL_API_TOKEN
+})
+```
+
+### Full Setup with Web3 (EVM)
+
+For creating and signing orders on EVM chains:
+
+<CodeGroup>
+
+```typescript web3.js
+import { SDK, PrivateKeyProviderConnector } from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+
+const web3 = new Web3('https://ethereum-rpc.publicnode.com')
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: process.env.DEV_PORTAL_API_TOKEN,
+    blockchainProvider: new PrivateKeyProviderConnector(
+        process.env.PRIVATE_KEY,
+        web3
+    )
+})
+```
+
+```typescript ethers.js
+import { SDK, PrivateKeyProviderConnector } from '@1inch/cross-chain-sdk'
+import { JsonRpcProvider } from 'ethers'
+
+const ethersRpcProvider = new JsonRpcProvider(
+    'https://ethereum-rpc.publicnode.com'
+)
+
+const ethersProviderConnector = {
+    eth: {
+        call(transactionConfig) {
+            return ethersRpcProvider.call(transactionConfig)
+        }
+    },
+    extend() {}
+}
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: process.env.DEV_PORTAL_API_TOKEN,
+    blockchainProvider: new PrivateKeyProviderConnector(
+        process.env.PRIVATE_KEY,
+        ethersProviderConnector
+    )
+})
+```
+
+</CodeGroup>
+
+## Verify Installation
+
+Test your setup by fetching a quote:
+
+```typescript
+import { SDK, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: process.env.DEV_PORTAL_API_TOKEN
+})
+
+async function testConnection() {
+    try {
+        const quote = await sdk.getQuote({
+            srcChainId: NetworkEnum.POLYGON,
+            dstChainId: NetworkEnum.BINANCE,
+            srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f', // USDT on Polygon
+            dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // BNB
+            amount: '10000000', // 10 USDT
+            walletAddress: '0x0000000000000000000000000000000000000000'
+        })
+        
+        console.log('SDK is working! Quote received:', quote)
+    } catch (error) {
+        console.error('SDK test failed:', error)
+    }
+}
+
+testConnection()
+```
+
+If this runs without errors, your SDK is properly configured!
+
+## TypeScript Configuration
+
+If you're using TypeScript, ensure your `tsconfig.json` includes:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true
+  }
+}
+```
+
+## Network-Specific RPC Endpoints
+
+For production applications, consider using dedicated RPC providers:
+
+<CardGroup cols={2}>
+  <Card title="Alchemy" icon="flask" href="https://www.alchemy.com">
+    Multi-chain RPC with enhanced APIs
+  </Card>
+  <Card title="Infura" icon="cloud" href="https://infura.io">
+    Ethereum and EVM-compatible networks
+  </Card>
+  <Card title="QuickNode" icon="bolt" href="https://www.quicknode.com">
+    High-performance multi-chain RPC
+  </Card>
+  <Card title="Public RPC" icon="globe" href="https://publicnode.com">
+    Free public endpoints for testing
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart Guide"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Build your first cross-chain swap
+  </Card>
+  <Card
+    title="SDK Configuration"
+    icon="gear"
+    href="/api/sdk"
+  >
+    Learn about advanced configuration options
+  </Card>
+</CardGroup>

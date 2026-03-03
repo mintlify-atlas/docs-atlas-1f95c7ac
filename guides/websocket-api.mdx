@@ -1,0 +1,555 @@
+---
+title: 'WebSocket API'
+description: 'Real-time order monitoring and event streaming'
+---
+
+## Overview
+
+The WebSocket API provides real-time updates for cross-chain orders, including order creation, status changes, fills, and secret sharing events. This is ideal for building responsive UIs and monitoring systems.
+
+## Installation
+
+```bash
+npm install @1inch/cross-chain-sdk
+```
+
+## Quick Start
+
+```typescript
+import { WebSocketApi } from '@1inch/cross-chain-sdk'
+
+const wsSdk = new WebSocketApi({
+    url: 'wss://api.1inch.com/fusion-plus/ws',
+    authKey: 'your-auth-key'
+})
+
+wsSdk.order.onOrder((data) => {
+    console.log('received order event', data)
+})
+```
+
+## Initialization
+
+### Basic Setup
+
+```typescript
+import { WebSocketApi } from '@1inch/cross-chain-sdk'
+
+const ws = new WebSocketApi({
+    url: 'wss://api.1inch.com/fusion-plus/ws',
+    authKey: 'your-auth-key'
+})
+```
+
+### Static Constructor
+
+```typescript
+const ws = WebSocketApi.new({
+    url: 'wss://api.1inch.com/fusion-plus/ws',
+    authKey: 'your-auth-key'
+})
+```
+
+### Lazy Initialization
+
+For cases where you don't want an immediate connection:
+
+```typescript
+const ws = new WebSocketApi({
+    url: 'wss://api.1inch.com/fusion-plus/ws',
+    authKey: 'your-auth-key',
+    lazyInit: true
+})
+
+// Connect when ready
+ws.init()
+```
+
+<Tip>
+Lazy initialization is useful when you want to set up event handlers before opening the connection.
+</Tip>
+
+## Order Events
+
+The WebSocket API provides several order-related events:
+
+### Listen to All Order Events
+
+```typescript
+wsSdk.order.onOrder((data) => {
+    if (data.event === 'order_created') {
+        console.log('New order:', data.data.orderHash)
+    }
+    if (data.event === 'order_invalid') {
+        console.log('Invalid order:', data.data.orderHash)
+    }
+    if (data.event === 'order_filled') {
+        console.log('Order filled:', data.data.orderHash)
+    }
+})
+```
+
+### Order Created
+
+```typescript
+import { EventType } from '@1inch/cross-chain-sdk'
+
+wsSdk.order.onOrderCreated((data) => {
+    console.log('Order created:', {
+        orderHash: data.data.orderHash,
+        srcChainId: data.data.srcChainId,
+        dstChainId: data.data.dstChainId,
+        quoteId: data.data.quoteId
+    })
+})
+```
+
+### Order Filled
+
+```typescript
+wsSdk.order.onOrderFilled((data) => {
+    console.log('Order completed:', data.data.orderHash)
+})
+```
+
+### Order Filled Partially
+
+```typescript
+wsSdk.order.onOrderFilledPartially((data) => {
+    console.log('Partial fill:', {
+        orderHash: data.data.orderHash,
+        remainingMakerAmount: data.data.remainingMakerAmount
+    })
+})
+```
+
+### Order Cancelled
+
+```typescript
+wsSdk.order.onOrderCancelled((data) => {
+    console.log('Order cancelled:', {
+        orderHash: data.data.orderHash,
+        remainingMakerAmount: data.data.remainingMakerAmount
+    })
+})
+```
+
+### Order Invalid
+
+```typescript
+wsSdk.order.onOrderInvalid((data) => {
+    console.log('Invalid order:', data.data.orderHash)
+})
+```
+
+### Balance Change
+
+Triggered when the maker's balance changes:
+
+```typescript
+wsSdk.order.onOrderBalanceChange((data) => {
+    console.log('Balance changed:', {
+        orderHash: data.data.orderHash,
+        remainingMakerAmount: data.data.remainingMakerAmount,
+        balance: data.data.balance
+    })
+})
+```
+
+### Allowance Change
+
+Triggered when token allowance changes:
+
+```typescript
+wsSdk.order.onOrderAllowanceChange((data) => {
+    console.log('Allowance changed:', {
+        orderHash: data.data.orderHash,
+        remainingMakerAmount: data.data.remainingMakerAmount,
+        allowance: data.data.allowance
+    })
+})
+```
+
+### Secret Shared
+
+Critical event for monitoring when secrets are published:
+
+```typescript
+wsSdk.order.onOrderSecretShared((data) => {
+    console.log('Secret shared:', {
+        idx: data.data.idx,
+        secret: data.data.secret,
+        srcImmutables: data.data.srcImmutables,
+        dstImmutables: data.data.dstImmutables
+    })
+})
+```
+
+<Warning>
+Secrets are shared publicly once submitted. Only share secrets after verifying escrow deployments.
+</Warning>
+
+## RPC Methods
+
+The WebSocket API supports RPC-style method calls:
+
+### Ping/Pong
+
+Health check mechanism:
+
+```typescript
+wsSdk.rpc.onPong((data) => {
+    console.log('Pong received:', data)
+})
+
+wsSdk.rpc.ping()
+```
+
+### Get Active Orders
+
+Retrieve active orders with pagination:
+
+```typescript
+wsSdk.rpc.onGetActiveOrders((data) => {
+    console.log('Active orders:', data.items)
+    console.log('Total:', data.meta.totalItems)
+})
+
+wsSdk.rpc.getActiveOrders({ page: 1, limit: 100 })
+```
+
+### Get Secrets
+
+Retrieve published secrets for orders:
+
+```typescript
+wsSdk.rpc.onGetSecrets((data) => {
+    if ('error' in data) {
+        console.error('Error fetching secrets:', data.error)
+    } else {
+        console.log('Secrets:', data.secrets)
+        console.log('Order type:', data.orderType)
+        console.log('Merkle leaves:', data.merkleLeaves)
+    }
+})
+
+wsSdk.rpc.getSecrets({ page: 1, limit: 10 })
+```
+
+### Get Allowed Methods
+
+```typescript
+wsSdk.rpc.onGetAllowedMethods((methods) => {
+    console.log('Allowed RPC methods:', methods)
+})
+
+wsSdk.rpc.getAllowedMethods()
+```
+
+## Connection Management
+
+### Connection Events
+
+```typescript
+import { WebSocketEvent } from '@1inch/cross-chain-sdk'
+
+wsSdk.onOpen(() => {
+    console.log('WebSocket connected')
+})
+
+wsSdk.onClose(() => {
+    console.log('WebSocket disconnected')
+})
+
+wsSdk.onError((error) => {
+    console.error('WebSocket error:', error)
+})
+
+wsSdk.onMessage((data) => {
+    console.log('Raw message:', data)
+})
+```
+
+### Manual Control
+
+```typescript
+// Send custom message
+wsSdk.send({ method: 'ping' })
+
+// Close connection
+wsSdk.close()
+```
+
+### Event Subscription
+
+```typescript
+// Subscribe to event
+function handleError(error) {
+    console.error('Error:', error)
+}
+
+wsSdk.on(WebSocketEvent.Error, handleError)
+
+// Unsubscribe from event
+wsSdk.off(WebSocketEvent.Error, handleError)
+```
+
+## Complete Example
+
+Real-time order monitoring dashboard:
+
+```typescript
+import { WebSocketApi, EventType, WebSocketEvent } from '@1inch/cross-chain-sdk'
+
+const ws = new WebSocketApi({
+    url: 'wss://api.1inch.com/fusion-plus/ws',
+    authKey: 'your-auth-key'
+})
+
+// Connection management
+ws.onOpen(() => {
+    console.log('Connected to 1inch WebSocket')
+    
+    // Request active orders on connect
+    ws.rpc.getActiveOrders({ page: 1, limit: 50 })
+})
+
+ws.onClose(() => {
+    console.log('Disconnected, attempting reconnect...')
+    // Implement reconnection logic
+})
+
+ws.onError((error) => {
+    console.error('WebSocket error:', error)
+})
+
+// Order tracking
+const activeOrders = new Map()
+
+ws.order.onOrderCreated((event) => {
+    const order = {
+        hash: event.data.orderHash,
+        srcChain: event.data.srcChainId,
+        dstChain: event.data.dstChainId,
+        status: 'created',
+        createdAt: Date.now()
+    }
+    
+    activeOrders.set(order.hash, order)
+    console.log('New order tracked:', order.hash)
+})
+
+ws.order.onOrderSecretShared((event) => {
+    const order = activeOrders.get(event.data.orderHash)
+    if (order) {
+        console.log(`Secret ${event.data.idx} shared for order ${order.hash}`)
+        // Verify escrow addresses
+        console.log('Source escrow:', event.data.srcImmutables)
+        console.log('Dest escrow:', event.data.dstImmutables)
+    }
+})
+
+ws.order.onOrderFilled((event) => {
+    const order = activeOrders.get(event.data.orderHash)
+    if (order) {
+        order.status = 'filled'
+        console.log('Order completed:', order.hash)
+        activeOrders.delete(order.hash)
+    }
+})
+
+ws.order.onOrderCancelled((event) => {
+    const order = activeOrders.get(event.data.orderHash)
+    if (order) {
+        order.status = 'cancelled'
+        console.log('Order cancelled:', order.hash)
+        activeOrders.delete(order.hash)
+    }
+})
+
+ws.order.onOrderInvalid((event) => {
+    console.warn('Invalid order detected:', event.data.orderHash)
+    activeOrders.delete(event.data.orderHash)
+})
+
+// RPC responses
+ws.rpc.onGetActiveOrders((data) => {
+    console.log(`Found ${data.meta.totalItems} active orders`)
+    data.items.forEach(order => {
+        console.log(`Order ${order.orderHash}: ${order.status}`)
+    })
+})
+
+// Health check
+setInterval(() => {
+    ws.rpc.ping()
+}, 30000)
+
+ws.rpc.onPong(() => {
+    console.log('Connection alive')
+})
+```
+
+## Event Types Reference
+
+### OrderEventType
+
+All possible order events:
+
+```typescript
+enum EventType {
+    OrderCreated = 'order_created',
+    OrderInvalid = 'order_invalid',
+    OrderBalanceChange = 'order_balance_change',
+    OrderAllowanceChange = 'order_allowance_change',
+    OrderFilled = 'order_filled',
+    OrderFilledPartially = 'order_filled_partially',
+    OrderCancelled = 'order_cancelled',
+    OrderSecretShared = 'secret_shared'
+}
+```
+
+### RPC Methods
+
+```typescript
+enum RpcMethod {
+    GetAllowedMethods = 'getAllowedMethods',
+    Ping = 'ping',
+    GetActiveOrders = 'getActiveOrders',
+    GetSecrets = 'getSecrets'
+}
+```
+
+## Custom WebSocket Provider
+
+You can provide your own WebSocket implementation:
+
+```typescript
+import { WsProviderConnector, WebSocketApi } from '@1inch/cross-chain-sdk'
+
+class MyCustomProvider implements WsProviderConnector {
+    send<T>(message: T): void {
+        // Custom send logic
+    }
+    
+    onMessage(cb: (data: any) => void): void {
+        // Custom message handler
+    }
+    
+    onOpen(cb: () => void): void {
+        // Custom open handler
+    }
+    
+    onClose(cb: () => void): void {
+        // Custom close handler
+    }
+    
+    onError(cb: (error: any) => void): void {
+        // Custom error handler
+    }
+    
+    on(event: string, cb: any): void {
+        // Custom event subscription
+    }
+    
+    off(event: string, cb: any): void {
+        // Custom event unsubscription
+    }
+    
+    close(): void {
+        // Custom close logic
+    }
+    
+    init(): void {
+        // Custom initialization
+    }
+}
+
+const provider = new MyCustomProvider()
+const wsSdk = new WebSocketApi(provider)
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Implement Reconnection">
+    Handle connection drops gracefully:
+
+    ```typescript
+    let reconnectAttempts = 0
+    const maxReconnectAttempts = 5
+
+    ws.onClose(() => {
+        if (reconnectAttempts < maxReconnectAttempts) {
+            setTimeout(() => {
+                reconnectAttempts++
+                ws.init()
+            }, Math.min(1000 * 2 ** reconnectAttempts, 30000))
+        }
+    })
+
+    ws.onOpen(() => {
+        reconnectAttempts = 0
+    })
+    ```
+  </Step>
+
+  <Step title="Use Heartbeat">
+    Implement ping/pong for connection health:
+
+    ```typescript
+    setInterval(() => {
+        ws.rpc.ping()
+    }, 30000)
+    ```
+  </Step>
+
+  <Step title="Handle Errors">
+    Always implement error handlers:
+
+    ```typescript
+    ws.onError((error) => {
+        console.error('WebSocket error:', error)
+        // Implement error reporting
+    })
+    ```
+  </Step>
+
+  <Step title="Clean Up Subscriptions">
+    Remove event handlers when component unmounts:
+
+    ```typescript
+    function cleanup() {
+        ws.off(WebSocketEvent.Message, messageHandler)
+        ws.close()
+    }
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Connection Fails
+
+- Verify WebSocket URL is correct
+- Check API key is valid
+- Ensure firewall allows WebSocket connections
+- Try without lazy initialization
+
+### No Events Received
+
+- Confirm event handlers are set up before connection
+- Check if authentication succeeded
+- Verify you're listening to correct events
+
+### Messages Not Parsing
+
+- Ensure you're using the correct SDK version
+- Check message format matches expected types
+- Use `onMessage` for raw debugging
+
+## Next Steps
+
+- Learn about [Order Management](/guides/order-management) for REST API methods
+- See [EVM to EVM Swaps](/guides/evm-to-evm) for creating orders
+- Explore [Integrator Fees](/guides/integrator-fees) for monetization

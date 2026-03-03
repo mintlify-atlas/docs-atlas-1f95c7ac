@@ -1,0 +1,376 @@
+---
+title: 'Chains and Networks'
+description: 'NetworkEnum, supported chains, and chain type utilities'
+---
+
+## Overview
+
+The Cross-Chain SDK supports multiple blockchain networks across EVM and Solana ecosystems. This page documents the chain enumerations, supported chains list, and utility functions for working with different chain types.
+
+## NetworkEnum
+
+Enumeration of all blockchain networks supported by the SDK.
+
+```typescript
+enum NetworkEnum {
+  ETHEREUM = 1,
+  POLYGON = 137,
+  ZKSYNC = 324,
+  BINANCE = 56,
+  ARBITRUM = 42161,
+  AVALANCHE = 43114,
+  OPTIMISM = 10,
+  FANTOM = 250,
+  GNOSIS = 100,
+  COINBASE = 8453,
+  LINEA = 59144,
+  SONIC = 146,
+  UNICHAIN = 130,
+  SOLANA = 501
+}
+```
+
+**Example:**
+```typescript
+import { NetworkEnum } from '@1inch/cross-chain-sdk'
+
+const srcChain = NetworkEnum.ETHEREUM
+const dstChain = NetworkEnum.POLYGON
+```
+
+## Supported Chains
+
+The SDK provides a constant array of all supported chains:
+
+```typescript
+const SupportedChains = [
+  NetworkEnum.ETHEREUM,
+  NetworkEnum.POLYGON,
+  NetworkEnum.BINANCE,
+  NetworkEnum.OPTIMISM,
+  NetworkEnum.ARBITRUM,
+  NetworkEnum.AVALANCHE,
+  NetworkEnum.GNOSIS,
+  NetworkEnum.COINBASE,
+  NetworkEnum.ZKSYNC,
+  NetworkEnum.LINEA,
+  NetworkEnum.SONIC,
+  NetworkEnum.UNICHAIN,
+  NetworkEnum.SOLANA
+] as const
+```
+
+## Chain Details
+
+### EVM Chains
+
+All chains except Solana use EVM (Ethereum Virtual Machine) architecture with 20-byte addresses.
+
+| Chain | Chain ID | Network Name | Address Format |
+|-------|----------|--------------|----------------|
+| Ethereum | 1 | `NetworkEnum.ETHEREUM` | 0x-prefixed hex (20 bytes) |
+| Optimism | 10 | `NetworkEnum.OPTIMISM` | 0x-prefixed hex (20 bytes) |
+| Binance Smart Chain | 56 | `NetworkEnum.BINANCE` | 0x-prefixed hex (20 bytes) |
+| Gnosis | 100 | `NetworkEnum.GNOSIS` | 0x-prefixed hex (20 bytes) |
+| Unichain | 130 | `NetworkEnum.UNICHAIN` | 0x-prefixed hex (20 bytes) |
+| Sonic | 146 | `NetworkEnum.SONIC` | 0x-prefixed hex (20 bytes) |
+| Polygon | 137 | `NetworkEnum.POLYGON` | 0x-prefixed hex (20 bytes) |
+| Fantom | 250 | `NetworkEnum.FANTOM` | 0x-prefixed hex (20 bytes) |
+| zkSync | 324 | `NetworkEnum.ZKSYNC` | 0x-prefixed hex (20 bytes) |
+| Coinbase (Base) | 8453 | `NetworkEnum.COINBASE` | 0x-prefixed hex (20 bytes) |
+| Arbitrum | 42161 | `NetworkEnum.ARBITRUM` | 0x-prefixed hex (20 bytes) |
+| Avalanche | 43114 | `NetworkEnum.AVALANCHE` | 0x-prefixed hex (20 bytes) |
+| Linea | 59144 | `NetworkEnum.LINEA` | 0x-prefixed hex (20 bytes) |
+
+### Solana
+
+| Chain | Chain ID | Network Name | Address Format |
+|-------|----------|--------------|----------------|
+| Solana | 501 | `NetworkEnum.SOLANA` | Base58-encoded (32 bytes) |
+
+## Type Aliases
+
+### SupportedChain
+
+Union type of all supported chain IDs.
+
+```typescript
+type SupportedChain = 1 | 137 | 324 | 56 | 42161 | 43114 | 10 | 250 | 100 | 8453 | 59144 | 146 | 130 | 501
+```
+
+**Example:**
+```typescript
+import { SupportedChain, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+function processChain(chainId: SupportedChain) {
+  // chainId is guaranteed to be a supported chain
+}
+
+processChain(NetworkEnum.ETHEREUM) // ✓ Valid
+processChain(999) // ✗ Type error
+```
+
+### EvmChain
+
+Union type of all EVM-compatible chain IDs (excludes Solana).
+
+```typescript
+type EvmChain = Exclude<SupportedChain, NetworkEnum.SOLANA>
+```
+
+**Example:**
+```typescript
+import { EvmChain, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+function processEvmChain(chainId: EvmChain) {
+  // chainId is guaranteed to be an EVM chain
+}
+
+processEvmChain(NetworkEnum.ETHEREUM) // ✓ Valid
+processEvmChain(NetworkEnum.SOLANA) // ✗ Type error
+```
+
+### SolanaChain
+
+Type representing the Solana chain ID.
+
+```typescript
+type SolanaChain = NetworkEnum.SOLANA
+```
+
+## Utility Functions
+
+### isSupportedChain
+
+Type guard to check if a value is a supported chain ID.
+
+```typescript
+isSupportedChain(chain: unknown): chain is SupportedChain
+```
+
+<ParamField path="chain" type="unknown" required>
+  The value to check
+</ParamField>
+
+**Returns:** `true` if the chain is supported, `false` otherwise
+
+**Example:**
+```typescript
+import { isSupportedChain, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+const chainId = 1
+if (isSupportedChain(chainId)) {
+  // TypeScript knows chainId is SupportedChain here
+  console.log('Supported chain:', chainId)
+}
+
+isSupportedChain(NetworkEnum.ETHEREUM) // true
+isSupportedChain(999) // false
+```
+
+### isEvm
+
+Type guard to check if a supported chain is an EVM-compatible chain.
+
+```typescript
+isEvm(chain: SupportedChain): chain is EvmChain
+```
+
+<ParamField path="chain" type="SupportedChain" required>
+  A supported chain ID
+</ParamField>
+
+**Returns:** `true` if the chain is EVM-compatible, `false` for Solana
+
+**Example:**
+```typescript
+import { isEvm, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+const chainId = NetworkEnum.ETHEREUM
+
+if (isEvm(chainId)) {
+  // Use EvmAddress
+  console.log('EVM chain detected')
+} else {
+  // Use SolanaAddress
+  console.log('Solana chain detected')
+}
+
+isEvm(NetworkEnum.ETHEREUM) // true
+isEvm(NetworkEnum.POLYGON) // true
+isEvm(NetworkEnum.SOLANA) // false
+```
+
+### isSolana
+
+Type guard to check if a supported chain is Solana.
+
+```typescript
+isSolana(chain: SupportedChain): chain is SolanaChain
+```
+
+<ParamField path="chain" type="SupportedChain" required>
+  A supported chain ID
+</ParamField>
+
+**Returns:** `true` if the chain is Solana, `false` otherwise
+
+**Example:**
+```typescript
+import { isSolana, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+const chainId = NetworkEnum.SOLANA
+
+if (isSolana(chainId)) {
+  console.log('Solana chain detected')
+  // Use Solana-specific logic
+}
+
+isSolana(NetworkEnum.SOLANA) // true
+isSolana(NetworkEnum.ETHEREUM) // false
+```
+
+## Usage Examples
+
+### Cross-Chain Transfer
+
+```typescript
+import { 
+  NetworkEnum, 
+  isEvm, 
+  isSolana,
+  EvmAddress,
+  SolanaAddress,
+  SDK 
+} from '@1inch/cross-chain-sdk'
+
+async function createCrossChainSwap(
+  srcChainId: SupportedChain,
+  dstChainId: SupportedChain,
+  amount: string
+) {
+  const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: 'your-auth-key'
+  })
+
+  // Determine token addresses based on chain type
+  const srcToken = isEvm(srcChainId) 
+    ? EvmAddress.NATIVE.toString()
+    : SolanaAddress.WRAPPED_NATIVE.toString()
+
+  const dstToken = isEvm(dstChainId)
+    ? EvmAddress.NATIVE.toString()
+    : SolanaAddress.WRAPPED_NATIVE.toString()
+
+  const quote = await sdk.getQuote({
+    srcChainId,
+    dstChainId,
+    srcTokenAddress: srcToken,
+    dstTokenAddress: dstToken,
+    amount,
+    walletAddress: '0x...', // Your wallet
+    enableEstimate: true
+  })
+
+  return quote
+}
+
+// Example: Ethereum to Polygon
+const ethToPolygon = await createCrossChainSwap(
+  NetworkEnum.ETHEREUM,
+  NetworkEnum.POLYGON,
+  '1000000000000000000' // 1 ETH
+)
+
+// Example: Ethereum to Solana
+const ethToSolana = await createCrossChainSwap(
+  NetworkEnum.ETHEREUM,
+  NetworkEnum.SOLANA,
+  '1000000000000000000' // 1 ETH
+)
+```
+
+### Chain Validation
+
+```typescript
+import { 
+  isSupportedChain, 
+  isEvm, 
+  NetworkEnum,
+  SupportedChain 
+} from '@1inch/cross-chain-sdk'
+
+function validateChainPair(
+  srcChain: unknown,
+  dstChain: unknown
+): { src: SupportedChain; dst: SupportedChain } {
+  if (!isSupportedChain(srcChain)) {
+    throw new Error(`Unsupported source chain: ${srcChain}`)
+  }
+  
+  if (!isSupportedChain(dstChain)) {
+    throw new Error(`Unsupported destination chain: ${dstChain}`)
+  }
+
+  if (srcChain === dstChain) {
+    throw new Error('Source and destination chains must be different')
+  }
+
+  return { src: srcChain, dst: dstChain }
+}
+
+// Usage
+const chains = validateChainPair(
+  NetworkEnum.ETHEREUM,
+  NetworkEnum.POLYGON
+) // ✓ Valid
+
+validateChainPair(999, NetworkEnum.ETHEREUM) // ✗ Throws error
+```
+
+### Multi-Chain Configuration
+
+```typescript
+import { NetworkEnum, EvmChain, SolanaChain } from '@1inch/cross-chain-sdk'
+
+const EVM_CHAINS: EvmChain[] = [
+  NetworkEnum.ETHEREUM,
+  NetworkEnum.POLYGON,
+  NetworkEnum.BINANCE,
+  NetworkEnum.OPTIMISM,
+  NetworkEnum.ARBITRUM,
+  NetworkEnum.AVALANCHE,
+  NetworkEnum.GNOSIS,
+  NetworkEnum.COINBASE,
+  NetworkEnum.ZKSYNC,
+  NetworkEnum.LINEA,
+  NetworkEnum.SONIC,
+  NetworkEnum.UNICHAIN
+]
+
+const SOLANA_CHAIN: SolanaChain = NetworkEnum.SOLANA
+
+// Get RPC endpoints for each chain
+const getRpcUrl = (chainId: SupportedChain): string => {
+  switch (chainId) {
+    case NetworkEnum.ETHEREUM:
+      return 'https://ethereum-rpc.publicnode.com'
+    case NetworkEnum.POLYGON:
+      return 'https://polygon-rpc.com'
+    case NetworkEnum.SOLANA:
+      return 'https://api.mainnet-beta.solana.com'
+    // ... other chains
+    default:
+      throw new Error(`No RPC configured for chain ${chainId}`)
+  }
+}
+```
+
+<Note>
+All chain IDs match their official network identifiers. For EVM chains, these are the standard chain IDs. For Solana, the chain ID is 501.
+</Note>
+
+<Tip>
+Use the type guard functions (`isEvm`, `isSolana`, `isSupportedChain`) to ensure type safety and proper address handling across different blockchain types.
+</Tip>

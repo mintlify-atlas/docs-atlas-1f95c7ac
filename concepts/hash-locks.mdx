@@ -1,0 +1,383 @@
+---
+title: Hash Locks
+description: Understanding hash locks, secret generation, and merkle trees in cross-chain swaps
+---
+
+# Hash Locks
+
+Hash locks are cryptographic commitments that enable atomic swaps without revealing secrets upfront. They ensure that only the party with the correct secret can unlock funds from an escrow.
+
+## Overview
+
+A hash lock is a 32-byte value derived from a secret that acts as a lock on an escrow. The escrow can only be unlocked by providing the original secret that hashes to the hash lock value.
+
+<Note>
+Hash locks use the keccak256 hashing algorithm, the same as Ethereum. This ensures compatibility across EVM and Solana chains and prevents secret guessing through collision resistance.
+</Note>
+
+## Secret Generation
+
+Secrets must be 32-byte (256-bit) cryptographically random values. Never use predictable or weak secrets.
+
+### Generating Secrets
+
+```typescript
+import { randomBytes } from 'crypto'
+
+// Generate a single secret for single-fill orders
+const secret = '0x' + randomBytes(32).toString('hex')
+
+// Generate multiple secrets for multiple-fill orders
+const secrets = Array.from({ length: 3 }).map(
+  () => '0x' + randomBytes(32).toString('hex')
+)
+```
+
+<Warning>
+Never reuse secrets across different orders. Each order must have unique, randomly generated secrets to maintain security.
+</Warning>
+
+### Secret Format
+
+Secrets must be:
+- Exactly 32 bytes (64 hex characters)
+- Hex-encoded with `0x` prefix
+- Cryptographically random
+
+```typescript
+// Valid secret format
+const secret = '0x531d1d2d7a594f1c7e413b074c7b693161486b5c495d457748144a01795c6a45'
+
+// Invalid - too short
+const invalid = '0x1234' // ❌
+
+// Invalid - not hex encoded
+const invalid2 = 'my-secret-password' // ❌
+```
+
+## Hashing Secrets
+
+The SDK provides the `HashLock.hashSecret()` method to hash secrets using keccak256:
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+
+const secret = '0x531d1d2d7a594f1c7e413b074c7b693161486b5c495d457748144a01795c6a45'
+
+// Hash the secret
+const secretHash = HashLock.hashSecret(secret)
+// Returns: 0x9f65fdcf781d4320c2dde70da02a1fe916d595dc1817149cc4758fd6a4bfd830
+```
+
+The hash is deterministic - the same secret always produces the same hash:
+
+```typescript
+// These will always produce the same hash
+HashLock.hashSecret(secret) === HashLock.hashSecret(secret) // true
+```
+
+## Single Fill Hash Locks
+
+For orders that will be filled in a single transaction, create a hash lock directly from the secret:
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+// Generate secret
+const secret = '0x' + randomBytes(32).toString('hex')
+
+// Create hash lock
+const hashLock = HashLock.forSingleFill(secret)
+
+// Store secret hash for order submission
+const secretHashes = [HashLock.hashSecret(secret)]
+```
+
+The `forSingleFill()` method is equivalent to:
+
+```typescript
+const secretHash = HashLock.hashSecret(secret)
+const hashLock = HashLock.fromString(secretHash)
+```
+
+Implementation from `src/domains/hash-lock/hash-lock.ts:66`:
+
+```typescript
+public static forSingleFill(secret: string): HashLock {
+    return new HashLock(HashLock.hashSecret(secret))
+}
+```
+
+## Multiple Fill Hash Locks
+
+For orders that support partial fills or multiple resolvers, hash locks use Merkle trees to commit to multiple secrets at once.
+
+### Why Merkle Trees?
+
+Merkle trees allow:
+- **Partial fills**: Different resolvers can fill portions of the order using different secrets
+- **Efficient verification**: Only the relevant secret and proof need to be provided
+- **Compact storage**: Single 32-byte root commits to all secrets
+
+### Creating Merkle Tree Hash Locks
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+// Generate multiple secrets (usually from preset.secretsCount)
+const secrets = Array.from({ length: 3 }).map(
+  () => '0x' + randomBytes(32).toString('hex')
+)
+
+// Create merkle leaves from secrets
+const leaves = HashLock.getMerkleLeaves(secrets)
+
+// Create hash lock from merkle root
+const hashLock = HashLock.forMultipleFills(leaves)
+
+// Store secret hashes for order submission
+const secretHashes = secrets.map(s => HashLock.hashSecret(s))
+```
+
+### Merkle Leaf Generation
+
+The SDK creates merkle leaves by combining the secret hash with an index:
+
+```typescript
+// From src/domains/hash-lock/hash-lock.ts:32
+public static getMerkleLeavesFromSecretHashes(
+    secretHashes: string[]
+): MerkleLeaf[] {
+    return secretHashes.map(
+        (s, idx) =>
+            solidityPackedKeccak256(
+                ['uint64', 'bytes32'],
+                [idx, s]
+            ) as MerkleLeaf
+    )
+}
+```
+
+Each leaf is: `keccak256(abi.encodePacked(index, secretHash))`
+
+This ensures:
+- Each secret has a unique leaf even if secrets were identical
+- Leaves are ordered and verifiable by index
+- Compatible with Solidity merkle proof verification
+
+### Parts Count Encoding
+
+Multiple fill hash locks encode the number of secrets in the top 16 bits:
+
+```typescript
+// From src/domains/hash-lock/hash-lock.ts:70
+public static forMultipleFills(leaves: MerkleLeaf[]): HashLock {
+    assert(
+        leaves.length > 2,
+        'leaves array must be greater than 2. Or use HashLock.forSingleFill'
+    )
+    const root = SimpleMerkleTree.of(leaves).root
+    const rootWithCount = BN.fromHex(root).setMask(
+        new BitMask(240n, 256n),
+        BigInt(leaves.length - 1)
+    )
+
+    return new HashLock(rootWithCount.toHex(64))
+}
+```
+
+The parts count can be retrieved:
+
+```typescript
+const partsCount = hashLock.getPartsCount()
+// Returns: 2n for 3 secrets (count is 0-indexed)
+```
+
+<Info>
+The SDK automatically handles parts count encoding. You only need to call `forMultipleFills()` with your merkle leaves.
+</Info>
+
+## Merkle Proofs
+
+When unlocking a specific fill, you need to provide a merkle proof to verify the secret belongs to the tree:
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+
+const secrets = ['0x...', '0x...', '0x...']
+const leaves = HashLock.getMerkleLeaves(secrets)
+
+// Get proof for the first secret (index 0)
+const proof = HashLock.getProof(leaves, 0)
+
+// The proof is an array of sibling hashes needed to reconstruct the root
+// proof: ['0x540daf363747246d40b31da95b3ef1c1497e22e9a56b70d117c835839822c95f']
+```
+
+Implementation from `src/domains/hash-lock/hash-lock.ts:44`:
+
+```typescript
+public static getProof(leaves: string[], idx: number): MerkleLeaf[] {
+    return SimpleMerkleTree.of(leaves).getProof(idx) as MerkleLeaf[]
+}
+```
+
+The SDK uses OpenZeppelin's `SimpleMerkleTree` for proof generation, ensuring compatibility with standard Solidity verification.
+
+## Complete Example
+
+Here's a complete example showing hash lock usage in an order:
+
+```typescript
+import { SDK, HashLock, NetworkEnum, PresetEnum } from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key'
+})
+
+// Get quote
+const quote = await sdk.getQuote({
+  amount: '1000000',
+  srcChainId: NetworkEnum.ETHEREUM,
+  dstChainId: NetworkEnum.BINANCE,
+  srcTokenAddress: '0x...',
+  dstTokenAddress: '0x...',
+  walletAddress: '0x...'
+})
+
+const preset = quote.getPreset(PresetEnum.fast)
+
+// Generate secrets based on preset
+const secrets = Array.from({ length: preset.secretsCount }).map(
+  () => '0x' + randomBytes(32).toString('hex')
+)
+
+// Create hash lock
+const hashLock = secrets.length === 1
+  ? HashLock.forSingleFill(secrets[0])
+  : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+// Generate secret hashes for submission
+const secretHashes = secrets.map(s => HashLock.hashSecret(s))
+
+// Create order
+const { hash } = await sdk.createOrder(quote, {
+  walletAddress: '0x...',
+  hashLock,
+  preset: PresetEnum.fast,
+  secretHashes
+})
+
+// Later: reveal secrets when escrows are ready
+const readyToShare = await sdk.getReadyToAcceptSecretFills(hash)
+for (const { idx } of readyToShare.fills) {
+  await sdk.submitSecret(hash, secrets[idx])
+}
+```
+
+## Security Best Practices
+
+<Warning>
+Never share secrets before verifying escrow deployments. Once a secret is revealed on-chain, anyone can use it to unlock escrows.
+</Warning>
+
+### Secret Storage
+
+1. **Keep secrets private**: Store secrets securely until escrows are deployed
+2. **Use secret hashes**: Share only hashes with the relayer, never raw secrets
+3. **Verify escrows**: Check escrow addresses and parameters before revealing
+
+### Secret Lifecycle
+
+```typescript
+// 1. Generate secrets (keep private)
+const secrets = generateSecrets()
+
+// 2. Create hash lock (public commitment)
+const hashLock = HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+// 3. Share hashes only (for order submission)
+const secretHashes = secrets.map(HashLock.hashSecret)
+
+// 4. Wait for escrow deployment
+const fills = await sdk.getReadyToAcceptSecretFills(orderHash)
+
+// 5. Verify escrows before revealing
+for (const fill of fills.fills) {
+  // Verify escrow address, amounts, etc.
+  const isValid = await verifyEscrow(fill)
+  if (isValid) {
+    await sdk.submitSecret(orderHash, secrets[fill.idx])
+  }
+}
+```
+
+## Implementation Details
+
+The `HashLock` class is defined in `src/domains/hash-lock/hash-lock.ts:8`:
+
+```typescript
+export class HashLock {
+    public static Web3Type = 'bytes32'
+    private readonly value: string
+
+    // Hashes a secret using keccak256
+    public static hashSecret(secret: string): string {
+        assert(
+            isHexBytes(secret) && getBytesCount(secret) === 32n,
+            'secret length must be 32 bytes hex encoded'
+        )
+        return keccak256(secret)
+    }
+
+    // Creates hash lock for single fill
+    public static forSingleFill(secret: string): HashLock {
+        return new HashLock(HashLock.hashSecret(secret))
+    }
+
+    // Creates hash lock for multiple fills using merkle root
+    public static forMultipleFills(leaves: MerkleLeaf[]): HashLock {
+        // Implementation shown above
+    }
+}
+```
+
+## FAQ
+
+<Accordion title="Why 32 bytes for secrets?">
+  32 bytes (256 bits) provides:
+  - Sufficient entropy to prevent brute force attacks
+  - Compatibility with keccak256 hash function
+  - Standard size for Ethereum bytes32 type
+  - Compatibility across EVM and Solana
+</Accordion>
+
+<Accordion title="Can I use the same secret for multiple orders?">
+  No. Always generate unique secrets for each order. Reusing secrets across orders can compromise security and make your orders vulnerable to replay attacks.
+</Accordion>
+
+<Accordion title="What happens if I lose my secrets?">
+  If you lose your secrets before revealing them:
+  - You cannot claim funds from the destination escrow
+  - After time locks expire, you can reclaim your original funds from the source escrow
+  - Always back up your secrets securely until the swap completes
+</Accordion>
+
+<Accordion title="How many secrets do I need?">
+  The number of secrets depends on the preset you choose:
+  - Fast preset: Typically 1 secret (single fill)
+  - Medium preset: Typically 3 secrets (multiple fills allowed)
+  - Slow preset: Typically 5 secrets (more flexibility)
+  
+  Check `preset.secretsCount` to determine the exact number.
+</Accordion>
+
+## Learn More
+
+- [Atomic Swaps](./atomic-swaps) - How hash locks enable trustless swaps
+- [Orders](./orders) - Using hash locks in order creation
+- [Presets](./presets) - How presets determine secret counts

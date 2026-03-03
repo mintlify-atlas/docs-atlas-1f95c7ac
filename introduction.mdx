@@ -1,0 +1,179 @@
+---
+title: Introduction
+description: Build cross-chain swaps with the 1inch Cross-Chain SDK - trustless atomic swaps between EVM chains and Solana
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.png"
+  alt="1inch Cross-Chain SDK Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.png"
+  alt="1inch Cross-Chain SDK Hero Dark"
+/>
+
+## Overview
+
+The 1inch Cross-Chain SDK enables developers to build trustless atomic swaps between different blockchain networks. Leveraging a secret-based hash lock mechanism, the SDK facilitates secure cross-chain token transfers without requiring a trusted intermediary.
+
+Whether you're building a cross-chain DEX aggregator, a multi-chain wallet, or any application that needs seamless asset transfers across networks, this SDK provides the tools you need.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get up and running with your first cross-chain swap in minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Install the SDK and configure your development environment
+  </Card>
+  <Card
+    title="API Reference"
+    icon="code"
+    href="/api/sdk"
+  >
+    Explore the complete SDK API documentation
+  </Card>
+  <Card
+    title="Guides"
+    icon="book-open"
+    href="/guides/evm-to-evm"
+  >
+    Learn from real-world implementation examples
+  </Card>
+</CardGroup>
+
+## Key Features
+
+### Cross-Chain Atomic Swaps
+
+Execute trustless swaps between EVM chains (Ethereum, Polygon, BSC, Arbitrum, Optimism, Avalanche, Base, and more) and Solana. The SDK handles all the complexity of cross-chain communication, escrow deployment, and settlement.
+
+### Secret-Based Hash Lock Mechanism
+
+Utilizes a cryptographic hash lock system to ensure atomicity - either both sides of the swap complete successfully, or neither does. Secrets are revealed progressively as escrows are deployed, ensuring trustless execution.
+
+### Real-Time Order Monitoring
+
+Built-in WebSocket API provides real-time updates on order status, escrow deployments, and fill events. Monitor your cross-chain swaps without polling.
+
+### Quote Generation and Estimation
+
+Get accurate quotes for cross-chain swaps with customizable presets (fast, medium, slow) or define your own auction parameters. Estimates include fees, slippage, and expected execution times.
+
+### Multi-Chain Support
+
+Supported networks include:
+
+<CardGroup cols={3}>
+  <Card title="Ethereum" icon="ethereum">
+    Chain ID: 1
+  </Card>
+  <Card title="Polygon" icon="triangle">
+    Chain ID: 137
+  </Card>
+  <Card title="BSC" icon="coins">
+    Chain ID: 56
+  </Card>
+  <Card title="Arbitrum" icon="circle-nodes">
+    Chain ID: 42161
+  </Card>
+  <Card title="Optimism" icon="o">
+    Chain ID: 10
+  </Card>
+  <Card title="Avalanche" icon="mountain">
+    Chain ID: 43114
+  </Card>
+  <Card title="Base" icon="b">
+    Chain ID: 8453
+  </Card>
+  <Card title="Gnosis" icon="g">
+    Chain ID: 100
+  </Card>
+  <Card title="zkSync" icon="z">
+    Chain ID: 324
+  </Card>
+  <Card title="Linea" icon="l">
+    Chain ID: 59144
+  </Card>
+  <Card title="Sonic" icon="s">
+    Chain ID: 146
+  </Card>
+  <Card title="Unichain" icon="u">
+    Chain ID: 130
+  </Card>
+  <Card title="Solana" icon="s">
+    Chain ID: 501
+  </Card>
+</CardGroup>
+
+### Native Asset Support
+
+Swap native assets (ETH, BNB, AVAX, MATIC, SOL) directly without wrapping. The SDK handles native asset transfers and escrow creation seamlessly.
+
+### Integrator Fee Support
+
+Earn fees as an integrator by specifying a fee receiver address and basis points. Fees are automatically deducted from the destination amount and sent to your specified address.
+
+## How It Works
+
+The SDK orchestrates a multi-step process for cross-chain swaps:
+
+<Steps>
+  <Step title="Get Quote">
+    Request a quote for your desired swap, specifying source and destination chains, tokens, and amounts.
+  </Step>
+  <Step title="Generate Secrets">
+    Create cryptographic secrets that will be used to unlock escrows. The number of secrets depends on whether the order allows multiple fills.
+  </Step>
+  <Step title="Create Hash Lock">
+    Generate a hash lock from your secrets using either single-fill or multiple-fill merkle tree approach.
+  </Step>
+  <Step title="Create Order">
+    Build and sign the cross-chain order with your wallet. For EVM chains, this uses EIP-712 typed data signing.
+  </Step>
+  <Step title="Submit Order">
+    Submit the order to the 1inch relayer, which broadcasts it to resolvers.
+  </Step>
+  <Step title="Monitor & Share Secrets">
+    Watch for escrow deployments and progressively reveal secrets to allow resolvers to complete fills.
+  </Step>
+  <Step title="Settlement">
+    Once all secrets are revealed and escrows are deployed, the swap completes and you receive your destination tokens.
+  </Step>
+</Steps>
+
+## Use Cases
+
+- **Cross-Chain DEX Aggregators**: Build interfaces that find the best prices across multiple chains
+- **Multi-Chain Wallets**: Enable users to seamlessly move assets between their accounts on different chains
+- **Bridge Interfaces**: Create user-friendly bridge UIs powered by atomic swap technology
+- **DeFi Protocols**: Integrate cross-chain swaps into yield optimization strategies
+- **Payment Solutions**: Accept payments in one chain and receive funds in another
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Install the SDK"
+    icon="download"
+    href="/installation"
+  >
+    Set up the SDK in your project
+  </Card>
+  <Card
+    title="Build Your First Swap"
+    icon="code"
+    href="/quickstart"
+  >
+    Follow the quickstart guide to create your first cross-chain swap
+  </Card>
+</CardGroup>

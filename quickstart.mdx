@@ -1,80 +1,468 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Create your first cross-chain swap in minutes with the 1inch Cross-Chain SDK
 ---
 
-## Get started in three steps
+This guide will walk you through creating a complete cross-chain swap from Polygon to Binance Smart Chain using the 1inch Cross-Chain SDK.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before starting, make sure you have:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+- Completed the [installation](/installation) steps
+- Your 1inch API key from [portal.1inch.dev](https://portal.1inch.dev)
+- A wallet with some USDT on Polygon (for this example)
+- Basic familiarity with TypeScript/JavaScript and Web3
 
-### Step 2: Deploy your changes
+## Overview
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+In this quickstart, you'll:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+1. Initialize the SDK with your credentials
+2. Get a quote for a cross-chain swap (10 USDT from Polygon to BNB on BSC)
+3. Generate secrets and create a hash lock
+4. Create and submit the order
+5. Monitor the order and reveal secrets
+6. Complete the swap
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+## Complete Example
 
-### Step 3: Go live
+Here's the complete working example:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+```typescript
+import {
+    HashLock,
+    NetworkEnum,
+    OrderStatus,
+    PresetEnum,
+    PrivateKeyProviderConnector,
+    SDK
+} from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+import { randomBytes } from 'node:crypto'
 
-## Next steps
+const privateKey = process.env.PRIVATE_KEY
+const rpc = 'https://polygon-rpc.publicnode.com'
+const authKey = process.env.DEV_PORTAL_API_TOKEN
+const source = 'my-app' // Replace with your app name
 
-Now that you have your docs running, explore these key features:
+const web3 = new Web3(rpc)
+const walletAddress = web3.eth.accounts.privateKeyToAccount(privateKey).address
 
-<CardGroup cols={2}>
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey,
+    blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+})
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+async function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+async function main(): Promise<void> {
+    // 10 USDT (Polygon) -> BNB (BSC)
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+    // Step 1: Get a quote
+    const quote = await sdk.getQuote({
+        amount: '10000000', // 10 USDT (6 decimals)
+        srcChainId: NetworkEnum.POLYGON,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true,
+        srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f', // USDT on Polygon
+        dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // BNB (native)
+        walletAddress
+    })
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+    console.log('Quote received:', {
+        dstAmount: quote.dstTokenAmount,
+        presets: Object.keys(quote.presets)
+    })
 
+    const preset = PresetEnum.fast
+
+    // Step 2: Generate secrets
+    const secrets = Array.from({
+        length: quote.presets[preset].secretsCount
+    }).map(() => '0x' + randomBytes(32).toString('hex'))
+
+    console.log(`Generated ${secrets.length} secret(s)`)
+
+    // Step 3: Create hash lock
+    const hashLock =
+        secrets.length === 1
+            ? HashLock.forSingleFill(secrets[0])
+            : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+    const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+
+    // Step 4: Create order
+    const { hash, quoteId, order } = await sdk.createOrder(quote, {
+        walletAddress,
+        hashLock,
+        preset,
+        source,
+        secretHashes
+    })
+    console.log({ hash }, 'Order created')
+
+    // Step 5: Submit order to relayer
+    const orderInfo = await sdk.submitOrder(
+        quote.srcChainId,
+        order,
+        quoteId,
+        secretHashes
+    )
+    console.log({ hash }, 'Order submitted')
+
+    // Step 6: Monitor and share secrets
+    while (true) {
+        // Check for escrows that need secrets
+        const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+        if (secretsToShare.fills.length) {
+            for (const { idx } of secretsToShare.fills) {
+                await sdk.submitSecret(hash, secrets[idx])
+                console.log({ idx }, 'Shared secret')
+            }
+        }
+
+        // Check if order is complete
+        const { status } = await sdk.getOrderStatus(hash)
+
+        if (
+            status === OrderStatus.Executed ||
+            status === OrderStatus.Expired ||
+            status === OrderStatus.Refunded
+        ) {
+            break
+        }
+
+        await sleep(1000)
+    }
+
+    const statusResponse = await sdk.getOrderStatus(hash)
+    console.log('Final status:', statusResponse)
+}
+
+main()
+```
+
+## Step-by-Step Breakdown
+
+Let's break down each step in detail:
+
+<Steps>
+  <Step title="Initialize the SDK">
+    Set up the SDK with your API key and blockchain provider:
+
+    ```typescript
+    import { SDK, PrivateKeyProviderConnector } from '@1inch/cross-chain-sdk'
+    import Web3 from 'web3'
+
+    const web3 = new Web3('https://polygon-rpc.publicnode.com')
+    const walletAddress = web3.eth.accounts.privateKeyToAccount(privateKey).address
+
+    const sdk = new SDK({
+        url: 'https://api.1inch.com/fusion-plus',
+        authKey: process.env.DEV_PORTAL_API_TOKEN,
+        blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+    })
+    ```
+
+    The `blockchainProvider` is required for signing orders. If you only need quotes, you can omit it.
+  </Step>
+
+  <Step title="Get a Quote">
+    Request a quote for your desired swap:
+
+    ```typescript
+    const quote = await sdk.getQuote({
+        amount: '10000000', // Amount in smallest unit (10 USDT with 6 decimals)
+        srcChainId: NetworkEnum.POLYGON,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true, // Required for creating orders
+        srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f', // USDT
+        dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // Native BNB
+        walletAddress
+    })
+    ```
+
+    <Note>
+    Use `0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee` as the token address for native assets (ETH, BNB, MATIC, etc.).
+    </Note>
+
+    The quote contains:
+    - `dstTokenAmount`: How much you'll receive on the destination chain
+    - `presets`: Available execution speed options (fast, medium, slow)
+    - `recommendedPreset`: The SDK's recommended preset for optimal execution
+    - `quoteId`: Required for order creation
+  </Step>
+
+  <Step title="Generate Secrets">
+    Create cryptographic secrets for the hash lock mechanism:
+
+    ```typescript
+    import { randomBytes } from 'node:crypto'
+
+    const preset = PresetEnum.fast // or quote.recommendedPreset
+
+    const secrets = Array.from({
+        length: quote.presets[preset].secretsCount
+    }).map(() => '0x' + randomBytes(32).toString('hex'))
+    ```
+
+    The number of secrets depends on the preset and whether multiple fills are allowed. Each secret is a 32-byte random value.
+
+    <Warning>
+    Store your secrets securely! You'll need them to unlock escrows and complete the swap. If you lose them, your funds may become locked.
+    </Warning>
+  </Step>
+
+  <Step title="Create Hash Lock">
+    Generate a hash lock from your secrets:
+
+    ```typescript
+    import { HashLock } from '@1inch/cross-chain-sdk'
+
+    const hashLock =
+        secrets.length === 1
+            ? HashLock.forSingleFill(secrets[0])
+            : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+    const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+    ```
+
+    For single-fill orders, use `HashLock.forSingleFill()`. For multiple fills, use `HashLock.forMultipleFills()` with merkle leaves.
+  </Step>
+
+  <Step title="Create and Submit Order">
+    Build the order and submit it to the 1inch relayer:
+
+    ```typescript
+    // Create the order
+    const { hash, quoteId, order } = await sdk.createOrder(quote, {
+        walletAddress,
+        hashLock,
+        preset: PresetEnum.fast,
+        source: 'my-app',
+        secretHashes
+    })
+
+    // Submit to relayer
+    await sdk.submitOrder(
+        quote.srcChainId,
+        order,
+        quoteId,
+        secretHashes
+    )
+    ```
+
+    The `source` parameter identifies your application for analytics. The order is automatically signed using your `blockchainProvider`.
+  </Step>
+
+  <Step title="Monitor and Share Secrets">
+    Watch for escrow deployments and reveal secrets when ready:
+
+    ```typescript
+    while (true) {
+        // Check which escrows are deployed and need secrets
+        const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+        if (secretsToShare.fills.length) {
+            for (const { idx } of secretsToShare.fills) {
+                // Reveal the secret for this fill
+                await sdk.submitSecret(hash, secrets[idx])
+                console.log(`Shared secret ${idx}`)
+            }
+        }
+
+        // Check order status
+        const { status } = await sdk.getOrderStatus(hash)
+
+        // Exit when complete
+        if (
+            status === OrderStatus.Executed ||
+            status === OrderStatus.Expired ||
+            status === OrderStatus.Refunded
+        ) {
+            break
+        }
+
+        await sleep(1000) // Poll every second
+    }
+    ```
+
+    <Info>
+    Secrets should only be revealed after verifying the escrow addresses are correct. The SDK handles this verification automatically in `getReadyToAcceptSecretFills()`.
+    </Info>
+  </Step>
+
+  <Step title="Check Final Status">
+    Once the loop exits, verify the final order status:
+
+    ```typescript
+    const finalStatus = await sdk.getOrderStatus(hash)
+    console.log('Swap completed!', finalStatus)
+    ```
+
+    Possible statuses:
+    - `Executed`: Swap completed successfully
+    - `Expired`: Order expired before execution
+    - `Refunded`: Order was refunded to your wallet
+  </Step>
+</Steps>
+
+## Token Approval
+
+<Warning>
+Before creating an order, ensure your wallet has approved the source token for the Limit Order Protocol contract on the source chain.
+</Warning>
+
+You'll need to approve the token spend before the first swap:
+
+```typescript
+import Web3 from 'web3'
+
+const web3 = new Web3(rpc)
+const tokenContract = new web3.eth.Contract(ERC20_ABI, srcTokenAddress)
+
+// Get the Limit Order Protocol contract address for your chain
+const spenderAddress = '0x...' // Get from SDK deployments
+
+await tokenContract.methods
+    .approve(spenderAddress, '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')
+    .send({ from: walletAddress })
+```
+
+## Presets Explained
+
+The SDK offers three preset execution speeds:
+
+<CardGroup cols={3}>
+  <Card title="Fast" icon="bolt">
+    Quick execution with potentially higher costs. Best for time-sensitive swaps.
+  </Card>
+  <Card title="Medium" icon="gauge">
+    Balanced execution speed and cost. Recommended for most use cases.
+  </Card>
+  <Card title="Slow" icon="snail">
+    Lower cost with longer execution time. Best for large swaps where timing is flexible.
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+You can also use `quote.recommendedPreset` to let the SDK choose the optimal preset based on current network conditions.
+
+## Common Patterns
+
+### Using Ethers.js Instead of Web3.js
+
+```typescript
+import { SDK, PrivateKeyProviderConnector } from '@1inch/cross-chain-sdk'
+import { JsonRpcProvider } from 'ethers'
+
+const ethersRpcProvider = new JsonRpcProvider(
+    'https://polygon-rpc.publicnode.com'
+)
+
+const ethersProviderConnector = {
+    eth: {
+        call(transactionConfig) {
+            return ethersRpcProvider.call(transactionConfig)
+        }
+    },
+    extend() {}
+}
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: process.env.DEV_PORTAL_API_TOKEN,
+    blockchainProvider: new PrivateKeyProviderConnector(
+        process.env.PRIVATE_KEY,
+        ethersProviderConnector
+    )
+})
+```
+
+### Adding Integrator Fees
+
+Earn fees as an integrator:
+
+```typescript
+import { Bps } from '@1inch/cross-chain-sdk'
+
+const quote = await sdk.getQuote({
+    amount: '10000000',
+    srcChainId: NetworkEnum.POLYGON,
+    dstChainId: NetworkEnum.BINANCE,
+    srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+    dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    walletAddress,
+    enableEstimate: true,
+    integratorFee: {
+        receiver: '0xYourFeeReceiverAddress',
+        value: new Bps(100n) // 1% fee (100 basis points)
+    }
+})
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Order stuck in pending status">
+    If your order remains pending:
+    
+    1. Verify you're calling `submitSecret()` when `getReadyToAcceptSecretFills()` returns fills
+    2. Check that your secrets match the hash lock you created
+    3. Ensure the source token has sufficient allowance
+    4. Verify the wallet has enough source tokens
+  </Accordion>
+
+  <Accordion title="'blockchainProvider has not set to config' error">
+    This error occurs when trying to sign orders without a blockchain provider. Add the `blockchainProvider` parameter when initializing the SDK:
+
+    ```typescript
+    const sdk = new SDK({
+        url: 'https://api.1inch.com/fusion-plus',
+        authKey: process.env.DEV_PORTAL_API_TOKEN,
+        blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+    })
+    ```
+  </Accordion>
+
+  <Accordion title="Insufficient allowance error">
+    Before creating orders, approve the source token for the Limit Order Protocol contract. See the [Token Approval](#token-approval) section above.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Native Asset Swaps"
+    icon="coins"
+    href="/guides/native-assets"
+  >
+    Learn how to swap native assets like ETH, BNB, and AVAX
+  </Card>
+  <Card
+    title="Solana Integration"
+    icon="s"
+    href="/guides/solana-to-evm"
+  >
+    Explore cross-chain swaps with Solana
+  </Card>
+  <Card
+    title="WebSocket API"
+    icon="plug"
+    href="/guides/websocket-api"
+  >
+    Use WebSocket for real-time order updates
+  </Card>
+  <Card
+    title="API Reference"
+    icon="code"
+    href="/api/sdk"
+  >
+    Explore the complete SDK API
+  </Card>
+</CardGroup>

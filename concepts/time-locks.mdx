@@ -1,0 +1,685 @@
+---
+title: Time Locks
+description: Understanding time locks and temporal safety mechanisms in cross-chain atomic swaps
+---
+
+# Time Locks
+
+Time locks are temporal safety mechanisms that govern when different parties can interact with escrows during a cross-chain swap. They ensure orderly execution and provide fallback options if the swap doesn't complete successfully.
+
+## Overview
+
+Time locks divide the swap lifecycle into distinct phases, each with different permissions and capabilities. This phased approach protects both the maker (user) and resolver (executor) while ensuring atomic execution.
+
+<Info>
+Think of time locks as traffic lights for your swap - they control when different actions are allowed, preventing conflicts and ensuring everyone has a fair chance to complete their part of the transaction.
+</Info>
+
+## Time Lock Structure
+
+Time locks are stored as a single 256-bit value that encodes multiple timestamps for both source and destination chains.
+
+From `src/domains/time-locks/time-locks.ts:20`:
+
+```typescript
+export class TimeLocks {
+    static DEFAULT_RESCUE_DELAY = 604800n // 7 days
+
+    protected constructor(
+        private readonly _srcWithdrawal: bigint,
+        private readonly _srcPublicWithdrawal: bigint,
+        private readonly _srcCancellation: bigint,
+        private readonly _srcPublicCancellation: bigint,
+        private readonly _dstWithdrawal: bigint,
+        private readonly _dstPublicWithdrawal: bigint,
+        private readonly _dstCancellation: bigint,
+        private _deployedAt: bigint
+    ) {
+        // Validation and initialization
+    }
+}
+```
+
+Each value represents a **delay in seconds from deployedAt** (when the escrow is created), not absolute timestamps.
+
+## Source Chain Time Locks
+
+Source chain time locks have **five distinct phases**:
+
+### Phase Timeline
+
+```
+| Finality Lock | Private Withdrawal | Public Withdrawal | Private Cancellation | Public Cancellation |
+^deployedAt
+```
+
+From `src/domains/time-locks/src-time-locks.ts:6`:
+
+```typescript
+export enum SrcStage {
+    FinalityLock,
+    PrivateWithdrawal,
+    PublicWithdrawal,
+    PrivateCancellation,
+    PublicCancellation
+}
+```
+
+### 1. Finality Lock
+
+**Purpose**: Wait for blockchain finality to prevent reorg attacks
+
+**Who can act**: No one
+
+**Duration**: Until `srcWithdrawal` delay passes
+
+```typescript
+const srcTimeLocks = timeLocks.toSrcTimeLocks(deployedAt)
+
+// Check if still in finality lock
+if (srcTimeLocks.isFinalityLock()) {
+    console.log('Waiting for chain finality...')
+}
+```
+
+This phase prevents:
+- Withdrawals before transactions are finalized
+- Race conditions between chains
+- Reorg-based attacks
+
+<Note>
+Finality requirements vary by chain:
+- Ethereum: ~15 minutes (2 epochs)
+- Polygon: ~30 seconds
+- Binance Smart Chain: ~15 seconds
+- Solana: ~13 seconds (32 confirmed blocks)
+</Note>
+
+### 2. Private Withdrawal
+
+**Purpose**: Give the resolver exclusive time to withdraw maker's tokens
+
+**Who can act**: Resolver only (the party who deployed the escrow)
+
+**Duration**: From `srcWithdrawal` to `srcPublicWithdrawal`
+
+```typescript
+// Time period: deployedAt + srcWithdrawal -> deployedAt + srcPublicWithdrawal
+if (srcTimeLocks.isPrivateWithdrawal()) {
+    console.log('Resolver can withdraw privately')
+}
+```
+
+The resolver can withdraw if they:
+1. Deployed both source and destination escrows
+2. Know the secret (revealed by maker on destination chain)
+3. Act within this time window
+
+### 3. Public Withdrawal
+
+**Purpose**: Allow anyone to complete the swap if resolver fails to act
+
+**Who can act**: Anyone with the secret
+
+**Duration**: From `srcPublicWithdrawal` to `srcCancellation`
+
+```typescript
+if (srcTimeLocks.isPublicWithdrawal()) {
+    console.log('Anyone can withdraw with the secret')
+}
+```
+
+This ensures:
+- Swap doesn't get stuck if resolver goes offline
+- Third parties can earn fees by completing abandoned swaps
+- Maker still receives their funds even if original resolver fails
+
+### 4. Private Cancellation
+
+**Purpose**: Give maker exclusive time to reclaim their tokens if swap failed
+
+**Who can act**: Maker only
+
+**Duration**: From `srcCancellation` to `srcPublicCancellation`
+
+```typescript
+if (srcTimeLocks.isPrivateCancellation()) {
+    console.log('Maker can cancel and reclaim funds')
+}
+```
+
+This happens when:
+- Destination escrow was never deployed
+- Secret was never revealed
+- Withdrawal periods expired without completion
+
+### 5. Public Cancellation
+
+**Purpose**: Allow anyone to clean up stuck escrows
+
+**Who can act**: Anyone
+
+**Duration**: After `srcPublicCancellation`
+
+```typescript
+if (srcTimeLocks.isPublicCancellation()) {
+    console.log('Anyone can trigger cancellation')
+}
+```
+
+This final phase ensures:
+- No funds are permanently locked
+- Network can clean up abandoned escrows
+- Safety deposits can be claimed by liquidators
+
+## Destination Chain Time Locks
+
+Destination chain time locks have **four phases** (no public cancellation):
+
+### Phase Timeline
+
+```
+| Finality Lock | Private Withdrawal | Public Withdrawal | Private Cancellation |
+^deployedAt
+```
+
+From `src/domains/time-locks/dst-time-locks.ts:6`:
+
+```typescript
+export enum DstStage {
+    FinalityLock,
+    PrivateWithdrawal,
+    PublicWithdrawal,
+    PrivateCancellation
+}
+```
+
+The phases work the same as source chain, except:
+- **No public cancellation**: Only the maker can cancel destination escrow
+- **Shorter durations**: Destination escrows typically have tighter time constraints
+
+### Why the Difference?
+
+```typescript
+// Source chain: 5 phases
+| Finality | Private W | Public W | Private C | Public C |
+
+// Destination chain: 4 phases  
+| Finality | Private W | Public W | Private C |
+```
+
+Destination chain doesn't need public cancellation because:
+- Maker reveals secret first (claiming destination tokens)
+- Once secret is public, anyone can complete source withdrawal
+- No risk of funds being permanently stuck
+
+## Creating Time Locks
+
+### From Quote Response
+
+The easiest way is to use time locks from the quote response:
+
+```typescript
+const quote = await sdk.getQuote(params)
+
+const timeLocks = TimeLocks.new({
+    srcWithdrawal: BigInt(quote.timeLocks.srcWithdrawal),
+    srcPublicWithdrawal: BigInt(quote.timeLocks.srcPublicWithdrawal),
+    srcCancellation: BigInt(quote.timeLocks.srcCancellation),
+    srcPublicCancellation: BigInt(quote.timeLocks.srcPublicCancellation),
+    dstWithdrawal: BigInt(quote.timeLocks.dstWithdrawal),
+    dstPublicWithdrawal: BigInt(quote.timeLocks.dstPublicWithdrawal),
+    dstCancellation: BigInt(quote.timeLocks.dstCancellation)
+})
+```
+
+### From Duration Values
+
+For custom configurations, create from phase durations:
+
+```typescript
+// From src/domains/time-locks/time-locks.ts:142
+const timeLocks = TimeLocks.fromDurations({
+    // Source chain phase durations
+    srcFinalityLock: 900n,           // 15 minutes
+    srcPrivateWithdrawal: 300n,      // 5 minutes
+    srcPublicWithdrawal: 600n,       // 10 minutes
+    srcPrivateCancellation: 300n,    // 5 minutes
+    
+    // Destination chain phase durations
+    dstFinalityLock: 300n,           // 5 minutes
+    dstPrivateWithdrawal: 300n,      // 5 minutes
+    dstPublicWithdrawal: 600n        // 10 minutes
+})
+```
+
+This method calculates cumulative delays:
+- `srcWithdrawal = srcFinalityLock`
+- `srcPublicWithdrawal = srcFinalityLock + srcPrivateWithdrawal`
+- `srcCancellation = srcFinalityLock + srcPrivateWithdrawal + srcPublicWithdrawal`
+- And so on...
+
+### From BigInt Encoding
+
+Time locks can be decoded from a packed 256-bit integer:
+
+```typescript
+// From on-chain data or serialized order
+const packed = 0x0000000000000000n // example value
+
+const timeLocks = TimeLocks.fromBigInt(packed)
+```
+
+The encoding packs 8 uint32 values:
+
+```typescript
+// From src/domains/time-locks/time-locks.ts:186
+public build(): bigint {
+    return [
+        this.deployedAt,
+        this._dstCancellation,
+        this._dstPublicWithdrawal,
+        this._dstWithdrawal,
+        this._srcPublicCancellation,
+        this._srcCancellation,
+        this._srcPublicWithdrawal,
+        this._srcWithdrawal
+    ].reduce((acc, el) => (acc << 32n) | el)
+}
+```
+
+## Working with Time Locks
+
+### Checking Current Phase
+
+```typescript
+import { now } from '@1inch/cross-chain-sdk'
+
+const currentTime = BigInt(now()) // Current timestamp in seconds
+
+// Source chain
+const srcTimeLocks = timeLocks.toSrcTimeLocks(deployedAt)
+const srcStage = srcTimeLocks.getStage(currentTime)
+
+switch (srcStage) {
+    case SrcStage.FinalityLock:
+        console.log('Waiting for finality')
+        break
+    case SrcStage.PrivateWithdrawal:
+        console.log('Resolver can withdraw')
+        break
+    case SrcStage.PublicWithdrawal:
+        console.log('Anyone can withdraw')
+        break
+    case SrcStage.PrivateCancellation:
+        console.log('Maker can cancel')
+        break
+    case SrcStage.PublicCancellation:
+        console.log('Anyone can cancel')
+        break
+}
+
+// Destination chain
+const dstTimeLocks = timeLocks.toDstTimeLocks(deployedAt)
+const dstStage = dstTimeLocks.getStage(currentTime)
+```
+
+### Getting Phase Timestamps
+
+```typescript
+const srcTimeLocks = timeLocks.toSrcTimeLocks(deployedAt)
+
+// Get absolute timestamps for each phase
+console.log('Private withdrawal starts:', srcTimeLocks.privateWithdrawal)
+console.log('Public withdrawal starts:', srcTimeLocks.publicWithdrawal)
+console.log('Private cancellation starts:', srcTimeLocks.privateCancellation)
+console.log('Public cancellation starts:', srcTimeLocks.publicCancellation)
+
+// Calculate time remaining
+const timeUntilPublicWithdrawal = srcTimeLocks.publicWithdrawal - BigInt(now())
+console.log('Seconds until public withdrawal:', timeUntilPublicWithdrawal)
+```
+
+### Converting Between Formats
+
+```typescript
+// Get source chain time locks
+const srcTimeLocks = timeLocks.toSrcTimeLocks(deployedAt)
+
+// Get destination chain time locks
+const dstTimeLocks = timeLocks.toDstTimeLocks(deployedAt)
+
+// Set deployed timestamp
+const updatedTimeLocks = timeLocks.setDeployedAt(BigInt(now()))
+
+// Serialize for on-chain use
+const packed = timeLocks.build()
+const hex = timeLocks.toJSON() // Returns hex string
+```
+
+## Time Lock Relationships
+
+Time locks must satisfy strict ordering constraints:
+
+### Source Chain Constraints
+
+```typescript
+// From src/domains/time-locks/time-locks.ts:40
+assert(_srcWithdrawal < _srcPublicWithdrawal, 
+    'srcWithdrawal can not be >= srcPublicWithdrawal')
+    
+assert(_srcPublicWithdrawal < _srcCancellation,
+    'srcPublicWithdrawal can not be >= srcCancellation')
+    
+assert(_srcCancellation < _srcPublicCancellation,
+    'srcCancellation can not be >= srcPublicCancellation')
+```
+
+This ensures phases occur in the correct order:
+```
+srcWithdrawal < srcPublicWithdrawal < srcCancellation < srcPublicCancellation
+```
+
+### Destination Chain Constraints
+
+```typescript
+assert(_dstWithdrawal < _dstPublicWithdrawal,
+    'dstWithdrawal can not be >= dstPublicWithdrawal')
+    
+assert(_dstPublicWithdrawal < _dstCancellation,
+    'dstPublicWithdrawal can not be >= dstCancellation')
+```
+
+### Cross-Chain Coordination
+
+For secure swaps, these relationships should hold:
+
+```typescript
+// Destination withdrawal should start before source cancellation
+dstWithdrawal < srcCancellation
+
+// This ensures:
+// 1. Maker can claim destination tokens
+// 2. Secret becomes public
+// 3. Resolver can claim source tokens
+// 4. If anything fails, maker can still cancel
+```
+
+## Practical Examples
+
+### Example 1: Fast Swap Configuration
+
+```typescript
+const fastTimeLocks = TimeLocks.fromDurations({
+    // Source: Quick finality and tight windows
+    srcFinalityLock: 60n,          // 1 minute
+    srcPrivateWithdrawal: 120n,    // 2 minutes
+    srcPublicWithdrawal: 180n,     // 3 minutes
+    srcPrivateCancellation: 120n,  // 2 minutes
+    
+    // Destination: Even faster
+    dstFinalityLock: 30n,          // 30 seconds
+    dstPrivateWithdrawal: 60n,     // 1 minute
+    dstPublicWithdrawal: 120n      // 2 minutes
+})
+
+// Total time from deployment to public cancellation:
+// 60 + 120 + 180 + 120 = 480 seconds (8 minutes)
+```
+
+### Example 2: Conservative Configuration
+
+```typescript
+const conservativeTimeLocks = TimeLocks.fromDurations({
+    // Source: Longer safety margins
+    srcFinalityLock: 900n,         // 15 minutes
+    srcPrivateWithdrawal: 600n,    // 10 minutes
+    srcPublicWithdrawal: 1800n,    // 30 minutes
+    srcPrivateCancellation: 600n,  // 10 minutes
+    
+    // Destination: Still relatively quick
+    dstFinalityLock: 300n,         // 5 minutes
+    dstPrivateWithdrawal: 600n,    // 10 minutes
+    dstPublicWithdrawal: 1200n     // 20 minutes
+})
+
+// Total: ~65 minutes to public cancellation
+```
+
+### Example 3: Monitoring Swap Progress
+
+```typescript
+async function monitorSwap(
+    orderHash: string,
+    timeLocks: TimeLocks,
+    deployedAt: bigint
+) {
+    const srcTimeLocks = timeLocks.toSrcTimeLocks(deployedAt)
+    const dstTimeLocks = timeLocks.toDstTimeLocks(deployedAt)
+    
+    while (true) {
+        const now = BigInt(Math.floor(Date.now() / 1000))
+        
+        const srcStage = srcTimeLocks.getStage(now)
+        const dstStage = dstTimeLocks.getStage(now)
+        
+        console.log('Source stage:', SrcStage[srcStage])
+        console.log('Destination stage:', DstStage[dstStage])
+        
+        // Check if we should reveal secret
+        if (dstStage === DstStage.PrivateWithdrawal) {
+            const fills = await sdk.getReadyToAcceptSecretFills(orderHash)
+            if (fills.fills.length > 0) {
+                console.log('Destination escrow ready - revealing secret')
+                // Reveal secret to claim destination tokens
+            }
+        }
+        
+        // Check if we need to cancel
+        if (srcStage === SrcStage.PrivateCancellation) {
+            console.log('Swap failed - canceling to reclaim funds')
+            // Cancel source escrow
+            break
+        }
+        
+        // Check if swap completed
+        const { status } = await sdk.getOrderStatus(orderHash)
+        if (status === OrderStatus.Executed) {
+            console.log('Swap completed successfully')
+            break
+        }
+        
+        await sleep(5000)
+    }
+}
+```
+
+## Time Lock Validation
+
+The SDK validates time locks to prevent invalid configurations:
+
+```typescript
+// From src/domains/time-locks/time-locks.ts:36
+assert(
+    _deployedAt <= UINT_32_MAX,
+    'deployedAt can not be > uint32 max value'
+)
+
+// Each delay must fit in uint32
+assert(
+    _srcWithdrawal <= UINT_32_MAX,
+    'srcWithdrawal can not be > uint32 max value'
+)
+
+// deployedAt must be greater than delays (delays are relative offsets)
+assert(
+    deployedAt > _withdrawal,
+    `deployedAt timestamp can not be less than withdrawal delay`
+)
+```
+
+<Warning>
+All time lock values must be:
+- Less than or equal to `UINT_32_MAX` (4,294,967,295)
+- Properly ordered (each phase after the previous)
+- Reasonable for the swap duration (not too short or too long)
+</Warning>
+
+## Integration with Presets
+
+Time locks are automatically configured based on your chosen preset:
+
+```typescript
+const quote = await sdk.getQuote(params)
+
+// Fast preset: Shorter time locks
+const fastPreset = quote.getPreset(PresetEnum.fast)
+// Uses tight time locks for quick execution
+
+// Slow preset: Longer time locks  
+const slowPreset = quote.getPreset(PresetEnum.slow)
+// Uses generous time locks for flexibility
+
+// Time locks from quote match the preset
+const timeLocks = TimeLocks.new({
+    srcWithdrawal: BigInt(quote.timeLocks.srcWithdrawal),
+    // ... matches selected preset characteristics
+})
+```
+
+See [Presets](./presets) for more information.
+
+## Common Scenarios
+
+### Scenario 1: Normal Execution
+
+```
+Time 0:     Escrows deployed (deployedAt)
+Time 60s:   Finality lock ends (srcWithdrawal)
+            Destination finality also complete
+Time 90s:   Maker reveals secret, claims destination tokens
+            Secret now public on destination chain
+Time 120s:  Resolver uses public secret to claim source tokens
+            ✓ Swap complete
+```
+
+### Scenario 2: Resolver Goes Offline
+
+```
+Time 0:     Escrows deployed
+Time 60s:   Finality lock ends
+Time 90s:   Maker reveals secret
+Time 180s:  srcPublicWithdrawal - anyone can complete now
+Time 200s:  Third-party completes withdrawal using public secret
+            Third-party earns fees
+            ✓ Swap complete (with help)
+```
+
+### Scenario 3: Failed Swap
+
+```
+Time 0:     Source escrow deployed
+Time ???:   Destination escrow NEVER deployed
+            (Resolver failed or changed mind)
+Time 960s:  srcCancellation - private cancellation begins
+Time 1000s: Maker cancels source escrow
+            Maker reclaims original tokens
+            ✓ Funds recovered
+```
+
+### Scenario 4: Stuck Escrow Cleanup
+
+```
+Time 0:     Escrows deployed
+Time 60s:   Finality lock ends  
+Time 180s:  Public withdrawal begins
+Time 360s:  Private cancellation begins
+Time 480s:  Public cancellation begins
+Time 500s:  Third-party triggers cancellation
+            Escrow cleaned up, safety deposits distributed
+            ✓ Network state cleaned
+```
+
+## Best Practices
+
+<Accordion title="Use preset time locks for production">
+  The time locks returned by `getQuote()` are battle-tested and optimized for:
+  - Network finality characteristics
+  - Typical execution patterns
+  - Safety margins
+  - Gas efficiency
+  
+  Only customize time locks if you have specific requirements and understand the tradeoffs.
+</Accordion>
+
+<Accordion title="Monitor time lock phases actively">
+  Don't assume phases will be handled automatically:
+  - Poll current phase regularly
+  - Act during appropriate windows
+  - Have fallback logic for failures
+  - Set up alerts for cancellation periods
+</Accordion>
+
+<Accordion title="Ensure sufficient time for secret revelation">
+  When revealing secrets:
+  - Act during private withdrawal for best experience
+  - Don't wait until the last second
+  - Account for network congestion
+  - Consider transaction confirmation times
+</Accordion>
+
+<Accordion title="Understand the rescue delay">
+  The default rescue delay is 7 days:
+  ```typescript
+  TimeLocks.DEFAULT_RESCUE_DELAY // 604800n seconds
+  ```
+  
+  This is a final safety mechanism. If your swap takes this long, something is very wrong.
+</Accordion>
+
+## FAQ
+
+<Accordion title="What happens if I miss the private withdrawal window?">
+  No problem! The swap enters public withdrawal phase:
+  - Anyone with the secret can complete the swap
+  - You still get your tokens
+  - Third parties may earn fees for completing it
+  - The atomic guarantee still holds
+</Accordion>
+
+<Accordion title="Can I extend time locks after creating an order?">
+  No. Time locks are committed when the order is created and signed. They're part of the order hash and cannot be changed.
+  
+  If you need different time locks, you must:
+  1. Cancel the existing order (during cancellation phase)
+  2. Create a new order with new time locks
+</Accordion>
+
+<Accordion title="Why do source and destination have different phase counts?">
+  Source chain has 5 phases (including public cancellation) while destination has 4.
+  
+  Reason: Once the maker reveals the secret on the destination chain, it becomes public knowledge. Anyone can use it to complete the source withdrawal, so there's no risk of permanent lock-up on the source side. Public cancellation is only needed on the source chain for edge cases.
+</Accordion>
+
+<Accordion title="What's the minimum safe time lock configuration?">
+  Absolute minimum depends on:
+  - Source chain finality time
+  - Destination chain finality time  
+  - Network congestion
+  - Expected secret revelation time
+  
+  For Ethereum ↔ BSC:
+  - At least 15 minutes for Ethereum finality
+  - At least 30 seconds for BSC finality
+  - At least 5 minutes for each withdrawal phase
+  - At least 5 minutes for cancellation
+  
+  **Recommendation**: Use preset time locks from the API.
+</Accordion>
+
+## Learn More
+
+- [Atomic Swaps](./atomic-swaps) - How time locks enable trustless execution
+- [Orders](./orders) - Using time locks in order creation
+- [Presets](./presets) - Pre-configured time lock values
+- [Hash Locks](./hash-locks) - Cryptographic counterpart to time locks

@@ -1,0 +1,322 @@
+---
+title: 'EVM to EVM Swaps'
+description: 'Complete guide for cross-chain swaps between EVM networks'
+---
+
+## Overview
+
+This guide demonstrates how to create atomic swaps between two EVM-compatible chains using the 1inch Cross-Chain SDK. The example shows a complete flow from getting a quote to monitoring order execution.
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- Node.js installed (v16 or higher)
+- An API key from the [1inch Developer Portal](https://portal.1inch.dev)
+- A wallet with sufficient token balance and gas on the source chain
+- Appropriate token allowance for the Limit Order Protocol contract
+
+<Warning>
+Never commit private keys to version control. Use environment variables or secure key management systems.
+</Warning>
+
+## Installation
+
+```bash
+npm install @1inch/cross-chain-sdk web3
+```
+
+## Complete Example
+
+This example demonstrates a 10 USDT swap from Polygon to BNB on BSC:
+
+```typescript
+import {
+    HashLock,
+    NetworkEnum,
+    OrderStatus,
+    PresetEnum,
+    PrivateKeyProviderConnector,
+    SDK
+} from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+import {randomBytes} from 'node:crypto'
+
+const privateKey =  '0x...'
+const rpc = 'https://ethereum-rpc.publicnode.com'
+const authKey = 'your-auth-key'
+const source = 'sdk-tutorial'
+
+const web3 = new Web3(rpc)
+const walletAddress = web3.eth.accounts.privateKeyToAccount(privateKey).address
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey,
+    blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+})
+
+async function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function main(): Promise<void> {
+    // 10 USDT (Polygon) -> BNB (BSC)
+
+    // estimate
+    const quote = await sdk.getQuote({
+        amount: '10000000',
+        srcChainId: NetworkEnum.POLYGON,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true,
+        srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f', // USDT
+        dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // BNB
+        walletAddress
+    })
+
+    const preset = PresetEnum.fast
+
+    // generate secrets
+    const secrets = Array.from({
+        length: quote.presets[preset].secretsCount
+    }).map(() => '0x' + randomBytes(32).toString('hex'))
+
+    const hashLock =
+        secrets.length === 1
+            ? HashLock.forSingleFill(secrets[0])
+            : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+    const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+
+    // create order
+    const {hash, quoteId, order} = await sdk.createOrder(quote, {
+        walletAddress,
+        hashLock,
+        preset,
+        source,
+        secretHashes
+    })
+    console.log({hash}, 'order created')
+
+    // submit order
+    const _orderInfo = await sdk.submitOrder(
+        quote.srcChainId,
+        order,
+        quoteId,
+        secretHashes
+    )
+    console.log({hash}, 'order submitted')
+
+    // submit secrets for deployed escrows
+    while (true) {
+        const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+        if (secretsToShare.fills.length) {
+            for (const {idx} of secretsToShare.fills) {
+
+                // it is responsibility of the client to check whether is safe to share secret (check escrow addresses and so on)
+                await sdk.submitSecret(hash, secrets[idx])
+
+                console.log({idx}, 'shared secret')
+            }
+        }
+
+        // check if order finished
+        const {status} = await sdk.getOrderStatus(hash)
+
+        if (
+            status === OrderStatus.Executed ||
+            status === OrderStatus.Expired ||
+            status === OrderStatus.Refunded
+        ) {
+            break
+        }
+
+        await sleep(1000)
+    }
+
+    const statusResponse = await sdk.getOrderStatus(hash)
+
+    console.log(statusResponse)
+}
+
+main()
+```
+
+## Step-by-Step Breakdown
+
+<Steps>
+  <Step title="Initialize the SDK">
+    Set up the SDK with your API key and blockchain provider:
+
+    ```typescript
+    const sdk = new SDK({
+        url: 'https://api.1inch.com/fusion-plus',
+        authKey,
+        blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+    })
+    ```
+
+    The `blockchainProvider` is only required for order creation and signing.
+  </Step>
+
+  <Step title="Get a Quote">
+    Request a quote with `enableEstimate: true` to get pricing and routing information:
+
+    ```typescript
+    const quote = await sdk.getQuote({
+        amount: '10000000', // 10 USDT (6 decimals)
+        srcChainId: NetworkEnum.POLYGON,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true,
+        srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+        dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        walletAddress
+    })
+    ```
+
+    <Tip>
+    Use `0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee` to represent native tokens (ETH, BNB, MATIC, etc.).
+    </Tip>
+  </Step>
+
+  <Step title="Generate Secrets">
+    Create cryptographic secrets for the atomic swap mechanism:
+
+    ```typescript
+    const secrets = Array.from({
+        length: quote.presets[preset].secretsCount
+    }).map(() => '0x' + randomBytes(32).toString('hex'))
+
+    const hashLock =
+        secrets.length === 1
+            ? HashLock.forSingleFill(secrets[0])
+            : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+    const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+    ```
+
+    <Warning>
+    Keep your secrets secure! Never log or expose them publicly. They're required to claim your destination tokens.
+    </Warning>
+  </Step>
+
+  <Step title="Create and Submit Order">
+    Create the order and submit it to the relayer:
+
+    ```typescript
+    const {hash, quoteId, order} = await sdk.createOrder(quote, {
+        walletAddress,
+        hashLock,
+        preset,
+        source,
+        secretHashes
+    })
+
+    await sdk.submitOrder(
+        quote.srcChainId,
+        order,
+        quoteId,
+        secretHashes
+    )
+    ```
+
+    The order is automatically signed using your `blockchainProvider`.
+  </Step>
+
+  <Step title="Monitor and Submit Secrets">
+    Watch for escrow deployments and submit secrets to complete the swap:
+
+    ```typescript
+    while (true) {
+        const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+        if (secretsToShare.fills.length) {
+            for (const {idx} of secretsToShare.fills) {
+                await sdk.submitSecret(hash, secrets[idx])
+                console.log({idx}, 'shared secret')
+            }
+        }
+
+        const {status} = await sdk.getOrderStatus(hash)
+
+        if (
+            status === OrderStatus.Executed ||
+            status === OrderStatus.Expired ||
+            status === OrderStatus.Refunded
+        ) {
+            break
+        }
+
+        await sleep(1000)
+    }
+    ```
+
+    <Warning>
+    Before sharing secrets in production, verify the escrow addresses and contract deployments to ensure they're legitimate.
+    </Warning>
+  </Step>
+</Steps>
+
+## Token Allowance
+
+<Warning>
+Before creating an order, ensure your wallet has approved the Limit Order Protocol contract to spend the source token.
+</Warning>
+
+You need to approve the contract once per token:
+
+```typescript
+const tokenContract = new web3.eth.Contract(ERC20_ABI, srcTokenAddress)
+
+const limitOrderProtocolAddress = '0x...' // Get from SDK documentation
+
+await tokenContract.methods
+    .approve(limitOrderProtocolAddress, amount)
+    .send({ from: walletAddress })
+```
+
+## Presets
+
+The SDK offers different execution presets:
+
+- `PresetEnum.fast` - Fastest execution, higher fees
+- `PresetEnum.medium` - Balanced speed and cost
+- `PresetEnum.slow` - Lowest fees, slower execution
+
+Use `quote.recommendedPreset` to get the SDK's recommendation based on current conditions.
+
+## Order Statuses
+
+- `OrderStatus.Pending` - Order submitted, waiting for resolver
+- `OrderStatus.Executed` - Successfully completed
+- `OrderStatus.Expired` - Order expired before execution
+- `OrderStatus.Refunded` - Order refunded to maker
+- `OrderStatus.Cancelled` - Order cancelled by maker
+
+## Troubleshooting
+
+### Order Not Executing
+
+1. Check token allowance is sufficient
+2. Verify wallet has enough balance
+3. Ensure secrets are submitted when `getReadyToAcceptSecretFills()` indicates
+4. Monitor order status for any errors
+
+### Transaction Failures
+
+- Verify RPC endpoint is responsive
+- Check gas prices are not too low
+- Ensure network is not congested
+
+### Secret Submission Issues
+
+- Only submit secrets when `fills.length > 0`
+- Use the correct secret index from the fills array
+- Verify escrow contracts are deployed before sharing
+
+## Next Steps
+
+- Learn about [Integrator Fees](/guides/integrator-fees) to monetize your integration
+- Explore [WebSocket API](/guides/websocket-api) for real-time order updates
+- See [Order Management](/guides/order-management) for advanced order operations

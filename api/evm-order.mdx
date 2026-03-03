@@ -1,0 +1,635 @@
+---
+title: 'EvmCrossChainOrder'
+description: 'EVM cross-chain order class for Ethereum and EVM-compatible chains'
+---
+
+## Overview
+
+The `EvmCrossChainOrder` class represents a cross-chain swap order on EVM-compatible blockchains (Ethereum, Polygon, Arbitrum, etc.). It extends `BaseOrder` and encapsulates all order parameters, escrow details, and auction mechanics.
+
+## Class Definition
+
+```typescript
+class EvmCrossChainOrder extends BaseOrder<EvmAddress, LimitOrderV4Struct>
+```
+
+## Constructor
+
+```typescript
+new EvmCrossChainOrder(
+  extension: EscrowExtension,
+  orderInfo: OrderInfoData,
+  extra?: EvmExtra
+)
+```
+
+<Warning>
+  The constructor is protected. Use static factory methods `new()`, `fromNative()`, or `fromDataAndExtension()` to create instances.
+</Warning>
+
+## Static Factory Methods
+
+### new()
+
+Create a new EVM cross-chain order.
+
+```typescript
+EvmCrossChainOrder.new(
+  escrowFactory: EvmAddress,
+  orderInfo: EvmCrossChainOrderInfo,
+  escrowParams: EvmEscrowParams,
+  details: EvmDetails,
+  extra?: EvmExtra
+): EvmCrossChainOrder
+```
+
+<ParamField path="escrowFactory" type="EvmAddress" required>
+  Address of the escrow factory contract
+</ParamField>
+
+<ParamField path="orderInfo" type="EvmCrossChainOrderInfo" required>
+  Core order information
+  
+  <Expandable title="properties">
+    <ParamField path="makerAsset" type="EvmAddress" required>
+      Source chain asset address
+    </ParamField>
+    
+    <ParamField path="takerAsset" type="AddressLike" required>
+      Destination chain asset address
+    </ParamField>
+    
+    <ParamField path="makingAmount" type="bigint" required>
+      Source chain amount to swap
+    </ParamField>
+    
+    <ParamField path="takingAmount" type="bigint" required>
+      Minimum destination chain amount to receive
+    </ParamField>
+    
+    <ParamField path="maker" type="EvmAddress" required>
+      Address of the order creator
+    </ParamField>
+    
+    <ParamField path="salt" type="bigint">
+      Random value for order uniqueness
+    </ParamField>
+    
+    <ParamField path="receiver" type="AddressLike">
+      Destination chain receiver address (defaults to maker if not set)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="escrowParams" type="EvmEscrowParams" required>
+  Escrow and security parameters
+  
+  <Expandable title="properties">
+    <ParamField path="hashLock" type="HashLock" required>
+      Hash lock for atomic swap security
+    </ParamField>
+    
+    <ParamField path="srcChainId" type="EvmChain" required>
+      Source chain ID (must be EVM)
+    </ParamField>
+    
+    <ParamField path="dstChainId" type="SupportedChain" required>
+      Destination chain ID (can be EVM or Solana)
+    </ParamField>
+    
+    <ParamField path="srcSafetyDeposit" type="bigint" required>
+      Safety deposit on source chain
+    </ParamField>
+    
+    <ParamField path="dstSafetyDeposit" type="bigint" required>
+      Safety deposit on destination chain
+    </ParamField>
+    
+    <ParamField path="timeLocks" type="TimeLocks" required>
+      Time lock configuration for escrow timeouts
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="details" type="EvmDetails" required>
+  Auction and whitelist configuration
+  
+  <Expandable title="properties">
+    <ParamField path="auction" type="AuctionDetails" required>
+      Dutch auction configuration
+    </ParamField>
+    
+    <ParamField path="whitelist" type="AuctionWhitelistItem[]" required>
+      List of addresses allowed to fill the order during exclusivity period
+    </ParamField>
+    
+    <ParamField path="resolvingStartTime" type="bigint">
+      Timestamp when order can be executed
+    </ParamField>
+    
+    <ParamField path="fees" type="Fees">
+      Integrator and resolver fee configuration
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="extra" type="EvmExtra">
+  Additional order options
+  
+  <Expandable title="properties">
+    <ParamField path="nonce" type="bigint">
+      Order nonce (max 40 bits)
+    </ParamField>
+    
+    <ParamField path="permit" type="string">
+      Permit calldata for gasless approvals
+    </ParamField>
+    
+    <ParamField path="orderExpirationDelay" type="bigint">
+      Time in seconds after auction ends before order expires (default: 12s)
+    </ParamField>
+    
+    <ParamField path="enablePermit2" type="boolean">
+      Enable Permit2 for token approvals
+    </ParamField>
+    
+    <ParamField path="source" type="string">
+      Integration source identifier
+    </ParamField>
+    
+    <ParamField path="allowMultipleFills" type="boolean">
+      Allow order to be filled multiple times
+    </ParamField>
+    
+    <ParamField path="allowPartialFills" type="boolean">
+      Allow order to be partially filled
+    </ParamField>
+    
+    <ParamField path="optimizeReceiverAddress" type="boolean">
+      Optimize receiver address encoding
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Example
+
+```typescript
+import { EvmCrossChainOrder, HashLock, TimeLocks, AuctionDetails } from '@1inch/cross-chain-sdk'
+
+const order = EvmCrossChainOrder.new(
+  escrowFactory,
+  {
+    makerAsset: EvmAddress.fromString('0x...'), // USDC on Ethereum
+    takerAsset: EvmAddress.fromString('0x...'), // USDC on Polygon
+    makingAmount: 1000000000n, // 1000 USDC
+    takingAmount: 999000000n,  // 999 USDC minimum
+    maker: EvmAddress.fromString('0x...')
+  },
+  {
+    hashLock: HashLock.forSingleFill(secret),
+    srcChainId: 1, // Ethereum
+    dstChainId: 137, // Polygon
+    srcSafetyDeposit: 10000000n,
+    dstSafetyDeposit: 10000000n,
+    timeLocks: TimeLocks.new(...)
+  },
+  {
+    auction: AuctionDetails.new(...),
+    whitelist: []
+  }
+)
+```
+
+### fromNative()
+
+Create an order from native asset (ETH, MATIC, etc.).
+
+```typescript
+EvmCrossChainOrder.fromNative(
+  chainId: number,
+  ethOrdersFactory: ProxyFactory,
+  escrowFactory: EvmAddress,
+  orderInfo: Omit<EvmCrossChainOrderInfo, 'makerAsset'>,
+  details: EvmDetails,
+  escrowParams: EvmEscrowParams,
+  extra?: EvmExtra
+): EvmCrossChainOrder
+```
+
+<Note>
+  Native orders must be submitted on-chain through `NativeOrderFactory.create` AND off-chain to the relayer.
+</Note>
+
+<ParamField path="chainId" type="number" required>
+  Source chain ID
+</ParamField>
+
+<ParamField path="ethOrdersFactory" type="ProxyFactory" required>
+  Native order factory contract instance
+</ParamField>
+
+<ParamField path="escrowFactory" type="EvmAddress" required>
+  Escrow factory contract address
+</ParamField>
+
+#### Example
+
+```typescript
+// Create order swapping ETH on Ethereum to USDC on Polygon
+const order = EvmCrossChainOrder.fromNative(
+  1, // Ethereum
+  ethOrderFactory,
+  escrowFactory,
+  {
+    takerAsset: usdcPolygon,
+    makingAmount: parseEther('1'), // 1 ETH
+    takingAmount: 2000000000n, // 2000 USDC
+    maker: userAddress
+  },
+  details,
+  escrowParams
+)
+```
+
+### fromDataAndExtension()
+
+Reconstitute an order from its serialized form.
+
+```typescript
+EvmCrossChainOrder.fromDataAndExtension(
+  order: LimitOrderV4Struct,
+  extension: Extension
+): EvmCrossChainOrder
+```
+
+<ParamField path="order" type="LimitOrderV4Struct" required>
+  Limit order structure from 1inch Fusion SDK
+</ParamField>
+
+<ParamField path="extension" type="Extension" required>
+  Extension data containing escrow parameters
+</ParamField>
+
+## Properties
+
+### Core Order Data
+
+<ResponseField name="maker" type="EvmAddress">
+  Address of the order creator
+</ResponseField>
+
+<ResponseField name="makerAsset" type="EvmAddress">
+  Source chain token address
+</ResponseField>
+
+<ResponseField name="takerAsset" type="AddressLike">
+  Destination chain token address
+</ResponseField>
+
+<ResponseField name="makingAmount" type="bigint">
+  Amount to swap on source chain
+</ResponseField>
+
+<ResponseField name="takingAmount" type="bigint">
+  Minimum amount to receive on destination chain
+</ResponseField>
+
+<ResponseField name="receiver" type="AddressLike">
+  Real receiver of funds on destination chain. Returns `maker` if not set.
+</ResponseField>
+
+<ResponseField name="salt" type="bigint">
+  Random salt for order uniqueness
+</ResponseField>
+
+<ResponseField name="nonce" type="bigint">
+  Order nonce
+</ResponseField>
+
+### Time Parameters
+
+<ResponseField name="deadline" type="bigint">
+  Order expiration timestamp in seconds
+</ResponseField>
+
+<ResponseField name="auctionStartTime" type="bigint">
+  Auction start timestamp in seconds
+</ResponseField>
+
+<ResponseField name="auctionEndTime" type="bigint">
+  Auction end timestamp in seconds
+</ResponseField>
+
+### Security Parameters
+
+<ResponseField name="hashLock" type="HashLock">
+  Hash lock for atomic swap
+</ResponseField>
+
+<ResponseField name="timeLocks" type="TimeLocks">
+  Time lock configuration
+</ResponseField>
+
+<ResponseField name="srcSafetyDeposit" type="bigint">
+  Safety deposit amount on source chain
+</ResponseField>
+
+<ResponseField name="dstSafetyDeposit" type="bigint">
+  Safety deposit amount on destination chain
+</ResponseField>
+
+### Chain Information
+
+<ResponseField name="dstChainId" type="SupportedChain">
+  Destination chain ID
+</ResponseField>
+
+<ResponseField name="extension" type="Extension">
+  Fusion extension containing auction and escrow data
+</ResponseField>
+
+<ResponseField name="escrowExtension" type="EscrowExtension">
+  Escrow-specific extension data
+</ResponseField>
+
+### Fill Configuration
+
+<ResponseField name="partialFillAllowed" type="boolean">
+  Whether partial fills are allowed
+</ResponseField>
+
+<ResponseField name="multipleFillsAllowed" type="boolean">
+  Whether multiple fills are allowed
+</ResponseField>
+
+## Methods
+
+### build()
+
+Build the order into a `LimitOrderV4Struct` for submission.
+
+```typescript
+build(): LimitOrderV4Struct
+```
+
+<ResponseField name="returns" type="LimitOrderV4Struct">
+  Serialized order structure
+</ResponseField>
+
+### getOrderHash()
+
+Get the unique hash of the order.
+
+```typescript
+getOrderHash(srcChainId: number): string
+```
+
+<ParamField path="srcChainId" type="number" required>
+  Source chain ID
+</ParamField>
+
+<ResponseField name="returns" type="string">
+  Order hash as hex string
+</ResponseField>
+
+### getOrderHashBuffer()
+
+Get the order hash as a Buffer.
+
+```typescript
+getOrderHashBuffer(srcChainId: number): Buffer
+```
+
+<ParamField path="srcChainId" type="number" required>
+  Source chain ID
+</ParamField>
+
+<ResponseField name="returns" type="Buffer">
+  Order hash as Buffer
+</ResponseField>
+
+### getTypedData()
+
+Get EIP-712 typed data for signing.
+
+```typescript
+getTypedData(srcChainId: number): EIP712TypedData
+```
+
+<ParamField path="srcChainId" type="number" required>
+  Source chain ID
+</ParamField>
+
+<ResponseField name="returns" type="EIP712TypedData">
+  EIP-712 typed data structure
+</ResponseField>
+
+### getCalculator()
+
+Get the auction calculator for this order.
+
+```typescript
+getCalculator(): AuctionCalculator
+```
+
+<ResponseField name="returns" type="AuctionCalculator">
+  Calculator for auction rate calculations
+</ResponseField>
+
+### getAmountCalculator()
+
+Get the amount calculator for this order.
+
+```typescript
+getAmountCalculator(): AmountCalculator
+```
+
+<ResponseField name="returns" type="AmountCalculator">
+  Calculator for amount conversions
+</ResponseField>
+
+### isExclusiveResolver()
+
+Check if a wallet can fill the order before others during the exclusivity period.
+
+```typescript
+isExclusiveResolver(wallet: EvmAddress): boolean
+```
+
+<ParamField path="wallet" type="EvmAddress" required>
+  Address to check
+</ParamField>
+
+<ResponseField name="returns" type="boolean">
+  `true` if wallet has exclusive access
+</ResponseField>
+
+### isExclusivityPeriod()
+
+Check if the order is in the exclusivity period.
+
+```typescript
+isExclusivityPeriod(time: bigint): boolean
+```
+
+<ParamField path="time" type="bigint" required>
+  Timestamp to check in seconds
+</ParamField>
+
+<ResponseField name="returns" type="boolean">
+  `true` if currently in exclusivity period
+</ResponseField>
+
+### canExecuteAt()
+
+Check whether an address is allowed to execute the order at a given time.
+
+```typescript
+canExecuteAt(executor: EvmAddress, executionTime: bigint): boolean
+```
+
+<ParamField path="executor" type="EvmAddress" required>
+  Address of the executor
+</ParamField>
+
+<ParamField path="executionTime" type="bigint" required>
+  Execution timestamp in seconds
+</ParamField>
+
+<ResponseField name="returns" type="boolean">
+  `true` if executor can fill at the given time
+</ResponseField>
+
+### getResolverFee()
+
+Calculate the resolver fee for filling the order.
+
+```typescript
+getResolverFee(
+  taker: EvmAddress,
+  time: bigint,
+  blockBaseFee?: bigint,
+  makingAmount?: bigint
+): bigint
+```
+
+<ParamField path="taker" type="EvmAddress" required>
+  Address of the resolver
+</ParamField>
+
+<ParamField path="time" type="bigint" required>
+  Execution timestamp in seconds
+</ParamField>
+
+<ParamField path="blockBaseFee" type="bigint">
+  Block base fee in wei (default: 0)
+</ParamField>
+
+<ParamField path="makingAmount" type="bigint">
+  Amount to fill (defaults to full order amount)
+</ParamField>
+
+<ResponseField name="returns" type="bigint">
+  Resolver fee amount
+</ResponseField>
+
+### getIntegratorFee()
+
+Calculate the integrator fee for filling the order.
+
+```typescript
+getIntegratorFee(
+  taker: EvmAddress,
+  time: bigint,
+  blockBaseFee?: bigint,
+  makingAmount?: bigint
+): bigint
+```
+
+<ParamField path="taker" type="EvmAddress" required>
+  Address of the resolver
+</ParamField>
+
+<ParamField path="time" type="bigint" required>
+  Execution timestamp in seconds
+</ParamField>
+
+<ParamField path="blockBaseFee" type="bigint">
+  Block base fee in wei (default: 0)
+</ParamField>
+
+<ParamField path="makingAmount" type="bigint">
+  Amount to fill (defaults to full order amount)
+</ParamField>
+
+<ResponseField name="returns" type="bigint">
+  Integrator fee amount
+</ResponseField>
+
+### Native Order Methods
+
+#### isNative()
+
+Check if this is a native asset order.
+
+```typescript
+isNative(
+  chainId: number,
+  ethOrderFactory: ProxyFactory,
+  signature: string
+): boolean
+```
+
+<ParamField path="chainId" type="number" required>
+  Chain ID to check
+</ParamField>
+
+<ParamField path="ethOrderFactory" type="ProxyFactory" required>
+  Native order factory instance
+</ParamField>
+
+<ParamField path="signature" type="string" required>
+  Order signature
+</ParamField>
+
+<ResponseField name="returns" type="boolean">
+  `true` if order uses native assets
+</ResponseField>
+
+#### nativeSignature()
+
+Get the signature for submitting a native order on-chain.
+
+```typescript
+nativeSignature(maker: EvmAddress): string
+```
+
+<Warning>
+  Only valid if `isNative()` returns `true`
+</Warning>
+
+<ParamField path="maker" type="EvmAddress" required>
+  Maker address
+</ParamField>
+
+<ResponseField name="returns" type="string">
+  Signature for on-chain submission
+</ResponseField>
+
+### toJSON()
+
+Serialize order to JSON.
+
+```typescript
+toJSON(): LimitOrderV4Struct
+```
+
+<ResponseField name="returns" type="LimitOrderV4Struct">
+  Serialized order (same as `build()`)
+</ResponseField>
+
+## Related Types
+
+- [SvmCrossChainOrder](/api/solana-order) - Solana cross-chain orders
+- [OrderStatus](/api/order-status) - Order status and lifecycle
+- [HashLock](/api/hash-lock) - Hash lock implementation

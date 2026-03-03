@@ -1,0 +1,301 @@
+---
+title: "NativeOrdersFactory"
+description: "Create cross-chain orders for native blockchain assets (ETH, AVAX, BNB, etc.)"
+---
+
+## Overview
+
+The `NativeOrdersFactory` class from `@1inch/fusion-sdk` enables creating cross-chain orders for native blockchain assets like ETH, AVAX, BNB, and other native tokens. Native asset orders require special handling because they don't use the standard ERC-20 approval flow.
+
+<Info>
+Native asset orders must be submitted both to the relayer API **and** broadcast on-chain. Use `SDK.submitNativeOrder()` for the relayer submission, then create and broadcast the transaction using `NativeOrdersFactory.create()`.
+</Info>
+
+## Installation
+
+The `NativeOrdersFactory` is exported from the main SDK package:
+
+```typescript
+import { NativeOrdersFactory, Address } from '@1inch/cross-chain-sdk'
+```
+
+## Getting a Factory Instance
+
+### default()
+
+Get the default native orders factory for a specific chain.
+
+```typescript
+import { NativeOrdersFactory, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+const factory = NativeOrdersFactory.default(NetworkEnum.AVALANCHE)
+```
+
+<ParamField path="chainId" type="NetworkEnum" required>
+  The chain ID for which to get the native orders factory (e.g., `NetworkEnum.ETHEREUM`, `NetworkEnum.AVALANCHE`, `NetworkEnum.BINANCE`)
+</ParamField>
+
+**Returns:** `NativeOrdersFactory` - The factory instance for the specified chain
+
+## Methods
+
+### create()
+
+Creates a transaction call object for submitting a native asset order on-chain.
+
+```typescript
+const call = factory.create(
+  new Address(wallet.address),
+  orderInfo.order
+)
+```
+
+<ParamField path="maker" type="Address" required>
+  The address of the order maker (the wallet creating the order)
+</ParamField>
+
+<ParamField path="order" type="LimitOrderV4Struct" required>
+  The order structure from `OrderInfo.order` (returned by `SDK.submitNativeOrder()`)
+</ParamField>
+
+**Returns:** Object with:
+- `to`: Address - The contract address to call
+- `data`: string - The encoded transaction data
+- `value`: bigint - The native token amount to send
+
+## Complete Example
+
+This example demonstrates a complete native asset cross-chain swap from AVAX (Avalanche) to USDC (Binance):
+
+```typescript
+import {
+  SDK,
+  EvmCrossChainOrder,
+  HashLock,
+  NetworkEnum,
+  PrivateKeyProviderConnector,
+  NativeOrdersFactory,
+  EvmAddress,
+  Address,
+  OrderStatus
+} from '@1inch/cross-chain-sdk'
+import { JsonRpcProvider, Wallet } from 'ethers'
+import { randomBytes } from 'node:crypto'
+import assert from 'node:assert'
+
+const PRIVATE_KEY = '0x...'
+const WEB3_NODE_URL = 'https://...'
+const AUTH_KEY = 'your-api-key'
+
+// Setup provider
+const ethersRpcProvider = new JsonRpcProvider(WEB3_NODE_URL)
+
+const ethersProviderConnector = {
+  eth: {
+    call(transactionConfig): Promise<string> {
+      return ethersRpcProvider.call(transactionConfig)
+    }
+  },
+  extend(): void {}
+}
+
+const connector = new PrivateKeyProviderConnector(
+  PRIVATE_KEY,
+  ethersProviderConnector
+)
+
+const wallet = new Wallet(PRIVATE_KEY, ethersRpcProvider)
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: AUTH_KEY,
+  blockchainProvider: connector,
+})
+
+async function main(): Promise<void> {
+  // Get quote for native asset swap
+  // 0.4 AVAX -> USDC on Binance
+  const quote = await sdk.getQuote({
+    amount: '400000000000000000',
+    srcChainId: NetworkEnum.AVALANCHE,
+    dstChainId: NetworkEnum.BINANCE,
+    enableEstimate: true,
+    srcTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // Native AVAX
+    dstTokenAddress: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', // USDC
+    walletAddress: wallet.address
+  })
+
+  const preset = quote.recommendedPreset
+
+  // Generate secrets for hash lock
+  const secrets = Array.from({
+    length: quote.presets[preset].secretsCount
+  }).map(() => '0x' + randomBytes(32).toString('hex'))
+
+  const hashLock =
+    secrets.length === 1
+      ? HashLock.forSingleFill(secrets[0])
+      : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+  const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+
+  // Create order
+  const { hash, quoteId, order } = sdk.createOrder(quote, {
+    walletAddress: wallet.address,
+    hashLock,
+    preset,
+    source: 'sdk-tutorial',
+    secretHashes
+  })
+
+  assert(order instanceof EvmCrossChainOrder)
+
+  console.log({ hash }, 'order created')
+
+  // Submit order to relayer
+  const orderInfo = await sdk.submitNativeOrder(
+    quote.srcChainId,
+    order,
+    EvmAddress.fromString(wallet.address),
+    quoteId,
+    secretHashes
+  )
+  console.log({ hash }, 'order submitted to relayer')
+
+  // Create native orders factory for source chain
+  const factory = NativeOrdersFactory.default(NetworkEnum.AVALANCHE)
+  
+  // Create the transaction call
+  const call = factory.create(
+    new Address(wallet.address),
+    orderInfo.order
+  )
+
+  // Send transaction on-chain
+  const txRes = await wallet.sendTransaction({
+    to: call.to.toString(),
+    data: call.data,
+    value: call.value
+  })
+
+  console.log({ txHash: txRes.hash }, 'transaction broadcasted')
+
+  // Wait for transaction confirmation
+  await wallet.provider.waitForTransaction(txRes.hash, 3)
+
+  // Submit secrets for deployed escrows
+  while (true) {
+    const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+    if (secretsToShare.fills.length) {
+      for (const { idx } of secretsToShare.fills) {
+        // It is the client's responsibility to verify escrow addresses
+        await sdk.submitSecret(hash, secrets[idx])
+        console.log({ idx }, 'shared secret')
+      }
+    }
+
+    // Check if order finished
+    const { status } = await sdk.getOrderStatus(hash)
+
+    if (
+      status === OrderStatus.Executed ||
+      status === OrderStatus.Expired ||
+      status === OrderStatus.Refunded
+    ) {
+      break
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+
+  const statusResponse = await sdk.getOrderStatus(hash)
+  console.log(statusResponse)
+}
+
+main()
+```
+
+## Native Asset Addresses
+
+When working with native assets, use the special address `0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`:
+
+```typescript
+// Native asset examples
+const ETH = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+const AVAX = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+const BNB = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+const MATIC = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+
+// Use with EvmAddress helper
+const nativeToken = EvmAddress.NATIVE
+```
+
+## Workflow
+
+The complete workflow for native asset orders:
+
+1. **Get a quote** with native asset as source token
+2. **Create the order** using `SDK.createOrder()`
+3. **Submit to relayer** using `SDK.submitNativeOrder()`
+4. **Get factory instance** using `NativeOrdersFactory.default(chainId)`
+5. **Create transaction** using `factory.create()`
+6. **Broadcast transaction** to the blockchain
+7. **Monitor and submit secrets** when escrows are deployed
+
+<Warning>
+Native asset orders must be broadcasted on-chain in addition to submitting to the relayer. If you only submit to the relayer without broadcasting the transaction, the order will not be processed.
+</Warning>
+
+## Key Differences from ERC-20 Orders
+
+| Aspect | ERC-20 Orders | Native Asset Orders |
+|--------|--------------|--------------------|
+| Submission | `SDK.submitOrder()` | `SDK.submitNativeOrder()` + on-chain tx |
+| Approval | Requires token approval | No approval needed |
+| Transaction Value | 0 | Native token amount |
+| Factory Usage | Not required | Required via `NativeOrdersFactory` |
+
+## Supported Chains
+
+Native asset orders are supported on all EVM chains supported by the SDK:
+
+- Ethereum (ETH)
+- Arbitrum (ETH)
+- Optimism (ETH)
+- Base (ETH)
+- Polygon (MATIC)
+- Avalanche (AVAX)
+- Binance Smart Chain (BNB)
+- Fantom (FTM)
+- Gnosis (xDAI)
+
+## Error Handling
+
+```typescript
+try {
+  const factory = NativeOrdersFactory.default(NetworkEnum.AVALANCHE)
+  const call = factory.create(
+    new Address(wallet.address),
+    orderInfo.order
+  )
+  
+  const txRes = await wallet.sendTransaction({
+    to: call.to.toString(),
+    data: call.data,
+    value: call.value
+  })
+  
+  await wallet.provider.waitForTransaction(txRes.hash)
+} catch (error) {
+  console.error('Failed to create native order:', error)
+  // Handle error appropriately
+}
+```
+
+## See Also
+
+- [SDK](/api/sdk) - Main SDK methods including `submitNativeOrder()`
+- [Escrow Factories](/api/escrow-factories) - Creating and managing escrows
+- [Native Assets Guide](/guides/native-assets) - Step-by-step guide for native asset swaps
+- [Orders](/api/evm-order) - Cross-chain order objects

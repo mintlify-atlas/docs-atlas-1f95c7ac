@@ -1,0 +1,728 @@
+---
+title: Orders
+description: Understanding cross-chain order structure, lifecycle, and differences between EVM and Solana orders
+---
+
+# Orders
+
+Orders are the core data structure in the 1inch Cross-Chain SDK, representing a user's intent to swap tokens across different blockchains.
+
+## Order Structure
+
+All cross-chain orders contain these fundamental components:
+
+### Basic Order Information
+
+```typescript
+type OrderInfo = {
+  // Source chain asset and amount
+  makerAsset: Address
+  makingAmount: bigint
+  
+  // Destination chain asset and amount
+  takerAsset: Address
+  takingAmount: bigint
+  
+  // Addresses
+  maker: Address        // Who created the order
+  receiver?: Address    // Who receives on destination (defaults to maker)
+}
+```
+
+### Escrow Parameters
+
+These parameters secure the atomic swap:
+
+```typescript
+type EscrowParams = {
+  hashLock: HashLock           // Cryptographic commitment to secrets
+  srcChainId: number           // Source blockchain ID
+  dstChainId: number           // Destination blockchain ID
+  srcSafetyDeposit: bigint     // Maker's safety deposit
+  dstSafetyDeposit: bigint     // Resolver's safety deposit
+  timeLocks: TimeLocks         // Time-based execution phases
+}
+```
+
+### Auction Details
+
+Auctions determine how the exchange rate changes over time:
+
+```typescript
+type AuctionDetails = {
+  startTime: bigint            // When auction begins (unix timestamp)
+  duration: bigint             // How long auction runs (seconds)
+  initialRateBump: number      // Initial rate improvement (%)
+  points: AuctionPoint[]       // Rate curve points
+  gasCost: {
+    gasBumpEstimate: bigint
+    gasPriceEstimate: bigint
+  }
+}
+```
+
+<Info>
+The auction mechanism allows orders to start with favorable rates and gradually become more competitive, incentivizing quick execution while ensuring eventual fulfillment.
+</Info>
+
+## Order Lifecycle
+
+Orders progress through several states:
+
+### 1. Created
+
+```typescript
+const { hash, quoteId, order } = await sdk.createOrder(quote, {
+  walletAddress,
+  hashLock,
+  preset,
+  source,
+  secretHashes
+})
+```
+
+At this stage:
+- Order is signed with the maker's private key
+- Hash lock commits to secrets without revealing them
+- Order is ready for submission but not yet active
+
+### 2. Submitted
+
+```typescript
+// EVM orders
+const orderInfo = await sdk.submitOrder(
+  srcChainId,
+  order,
+  quoteId,
+  secretHashes
+)
+
+// Solana orders (requires both off-chain and on-chain submission)
+const orderHash = await sdk.announceOrder(order, quoteId, secretHashes)
+// Then publish on-chain transaction
+```
+
+The order is now:
+- Visible to resolvers in the relayer network
+- Waiting for a resolver to pick it up
+- In the auction phase
+
+### 3. Executing
+
+When a resolver accepts the order:
+- Source escrow deployed (locks maker's tokens)
+- Destination escrow deployed (locks resolver's tokens)
+- Waiting for secret revelation
+
+```typescript
+// Monitor for ready escrows
+const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+for (const { idx } of secretsToShare.fills) {
+  // Verify escrow before revealing
+  await sdk.submitSecret(hash, secrets[idx])
+}
+```
+
+### 4. Completed States
+
+**Executed**: Secrets revealed, funds exchanged
+```typescript
+const { status } = await sdk.getOrderStatus(hash)
+// status === OrderStatus.Executed
+```
+
+**Expired**: Time locks expired without completion
+```typescript
+// status === OrderStatus.Expired
+```
+
+**Refunded**: Parties reclaimed their original funds
+```typescript
+// status === OrderStatus.Refunded
+```
+
+## EVM Orders
+
+EVM orders use the 1inch Limit Order Protocol with custom escrow extensions.
+
+### EVM Order Type
+
+From `src/cross-chain-order/evm/types.ts:8`:
+
+```typescript
+export type EvmCrossChainOrderInfo = {
+    // Source chain asset
+    makerAsset: EvmAddress
+    // Destination chain asset
+    takerAsset: AddressLike
+    // Source chain amount
+    makingAmount: bigint
+    // Destination chain min amount
+    takingAmount: bigint
+    maker: EvmAddress
+    salt?: bigint
+    // Destination chain receiver address
+    // If not set, then `maker` used
+    receiver?: AddressLike
+}
+```
+
+### Creating EVM Orders
+
+```typescript
+import { 
+  EvmCrossChainOrder, 
+  HashLock, 
+  TimeLocks,
+  AuctionDetails 
+} from '@1inch/cross-chain-sdk'
+
+const order = EvmCrossChainOrder.new(
+  escrowFactory,
+  {
+    makerAsset: EvmAddress.fromString('0x...'),
+    takerAsset: EvmAddress.fromString('0x...'),
+    makingAmount: 1000000n,
+    takingAmount: 2000000n,
+    maker: EvmAddress.fromString('0x...'),
+    receiver: EvmAddress.fromString('0x...') // optional
+  },
+  {
+    hashLock,
+    srcChainId: NetworkEnum.ETHEREUM,
+    dstChainId: NetworkEnum.BINANCE,
+    srcSafetyDeposit: 100000n,
+    dstSafetyDeposit: 200000n,
+    timeLocks
+  },
+  {
+    auction: auctionDetails,
+    whitelist: [], // Optional resolver whitelist
+    fees: {        // Optional integrator/resolver fees
+      integratorFee: { receiver: '0x...', bps: 100n },
+      resolverFee: { receiver: '0x...', bps: 50n }
+    }
+  },
+  {
+    permit: '0x...',              // Optional permit for token approval
+    enablePermit2: true,          // Use Permit2 instead of standard approve
+    allowMultipleFills: true,     // Allow partial fills by multiple resolvers
+    allowPartialFills: true,      // Allow partial order fulfillment
+    orderExpirationDelay: 12n     // Seconds after auction ends
+  }
+)
+```
+
+### EVM Order Properties
+
+Access order properties from `src/cross-chain-order/evm/evm-cross-chain-order.ts`:
+
+```typescript
+// Asset information
+order.makerAsset        // Source token address
+order.takerAsset        // Destination token address
+order.makingAmount      // Source amount
+order.takingAmount      // Destination amount
+
+// Addresses
+order.maker             // Order creator
+order.receiver          // Funds recipient (or maker if zero)
+
+// Escrow parameters
+order.hashLock          // Hash lock commitment
+order.timeLocks         // Time lock configuration
+order.srcSafetyDeposit  // Maker's safety deposit
+order.dstSafetyDeposit  // Resolver's safety deposit
+order.dstChainId        // Destination chain
+
+// Auction timing
+order.auctionStartTime  // When auction begins
+order.auctionEndTime    // When auction ends
+order.deadline          // Order expiration time
+
+// Fill options
+order.partialFillAllowed     // Can be partially filled
+order.multipleFillsAllowed   // Can be filled by multiple resolvers
+
+// Identifiers
+order.salt              // Unique order identifier
+order.nonce             // Replay protection
+```
+
+### EVM Order Methods
+
+```typescript
+// Get order hash for tracking
+const orderHash = order.getOrderHash(srcChainId)
+
+// Calculate required taking amount at specific time
+const takingAmount = order.calcTakingAmount(
+  makingAmount,
+  executionTime,
+  blockBaseFee
+)
+
+// Check if order expired
+const isExpired = order.isExpiredAt(Math.floor(Date.now() / 1000))
+
+// Check execution permissions
+const canExecute = order.canExecuteAt(
+  resolverAddress,
+  executionTime
+)
+
+// Calculate fees
+const resolverFee = order.getResolverFee(
+  resolverAddress,
+  executionTime,
+  blockBaseFee,
+  makingAmount
+)
+
+const integratorFee = order.getIntegratorFee(
+  resolverAddress,
+  executionTime,
+  blockBaseFee,
+  makingAmount
+)
+
+// Generate immutables for escrow creation
+const immutables = order.toSrcImmutables(
+  srcChainId,
+  resolverAddress,
+  fillAmount,
+  hashLock // or merkle leaf for partial fills
+)
+
+// Serialize for submission
+const orderStruct = order.toJSON()
+const typedData = order.getTypedData(srcChainId)
+```
+
+### Native Asset Orders
+
+For swapping native assets (ETH, AVAX, etc.):
+
+```typescript
+import { EvmCrossChainOrder, NativeOrdersFactory } from '@1inch/cross-chain-sdk'
+
+const order = EvmCrossChainOrder.fromNative(
+  chainId,
+  ethOrdersFactory,
+  escrowFactory,
+  {
+    // makerAsset omitted - will use wrapped native
+    takerAsset: dstTokenAddress,
+    makingAmount: parseEther('1.0'),
+    takingAmount: 1000000n,
+    maker,
+    receiver
+  },
+  details,
+  escrowParams,
+  extra
+)
+
+// Submit on-chain through NativeOrderFactory
+const factory = NativeOrdersFactory.default(chainId)
+const call = factory.create(makerAddress, order.toJSON())
+
+await wallet.sendTransaction({
+  to: call.to.toString(),
+  data: call.data,
+  value: call.value // Native asset amount
+})
+```
+
+<Note>
+Native asset orders require both off-chain submission to the relayer and on-chain transaction through the NativeOrderFactory contract.
+</Note>
+
+## Solana Orders
+
+Solana orders use native Solana programs instead of EVM smart contracts.
+
+### Solana Order Type
+
+From `src/cross-chain-order/svm/types.ts:10`:
+
+```typescript
+export type SolanaEscrowParams = {
+    hashLock: HashLock
+    srcChainId: NetworkEnum.SOLANA
+    dstChainId: SupportedChain
+    srcSafetyDeposit: bigint
+    dstSafetyDeposit: bigint
+    timeLocks: TimeLocks
+}
+
+export type SolanaExtra = {
+    srcAssetIsNative?: boolean
+    orderExpirationDelay?: bigint  // Default 12s
+    resolverCancellationConfig?: ResolverCancellationConfig
+    source?: string
+    allowMultipleFills?: boolean
+    salt?: bigint
+}
+```
+
+### Creating Solana Orders
+
+```typescript
+import { 
+  SvmCrossChainOrder,
+  SolanaAddress,
+  EvmAddress,
+  NetworkEnum 
+} from '@1inch/cross-chain-sdk'
+
+const order = SvmCrossChainOrder.new(
+  {
+    srcToken: SolanaAddress.fromString('Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'),
+    dstToken: EvmAddress.fromString('0xdac17f958d2ee523a2206206994597c13d831ec7'),
+    maker: SolanaAddress.fromString(makerPublicKey),
+    receiver: EvmAddress.fromString('0x...'),
+    srcAmount: 10_000_000n,        // u64
+    minDstAmount: 10_000_000n      // u256
+  },
+  {
+    hashLock,
+    srcChainId: NetworkEnum.SOLANA,
+    dstChainId: NetworkEnum.ETHEREUM,
+    srcSafetyDeposit: 100000n,
+    dstSafetyDeposit: 200000n,
+    timeLocks
+  },
+  {
+    auction: auctionDetails
+  },
+  {
+    allowMultipleFills: true,
+    orderExpirationDelay: 12n,
+    source: 'my-integration'
+  }
+)
+```
+
+### Solana Order Properties
+
+From `src/cross-chain-order/svm/svm-cross-chain-order.ts`:
+
+```typescript
+// Asset information
+order.makerAsset        // Source token address (SolanaAddress)
+order.takerAsset        // Destination token address (EvmAddress)
+order.makingAmount      // Source amount (u64)
+order.takingAmount      // Destination amount (u256)
+
+// Addresses
+order.maker             // Order creator (SolanaAddress)
+order.receiver          // Funds recipient (EvmAddress)
+
+// Escrow parameters
+order.hashLock          // Hash lock commitment
+order.timeLocks         // Time lock configuration
+order.srcSafetyDeposit  // Maker's safety deposit
+order.dstSafetyDeposit  // Resolver's safety deposit
+order.dstChainId        // Destination chain
+
+// Solana-specific
+order.srcAssetIsNative  // True if swapping native SOL
+order.resolverCancellationConfig  // Cancellation parameters
+order.salt              // u64 with embedded source tracking
+
+// Auction
+order.auction           // AuctionDetails object
+order.auctionStartTime  // When auction begins
+order.auctionEndTime    // When auction ends
+order.deadline          // Order expiration (u32)
+
+// Fill options
+order.partialFillAllowed      // Same as multipleFillsAllowed
+order.multipleFillsAllowed    // Allow multiple fills
+```
+
+### Solana Order Methods
+
+```typescript
+// Get order hash (base58 encoded for Solana)
+const orderHash = order.getOrderHash(srcChainId)
+
+// Get order account PDA
+const orderAccount = order.getOrderAccount(programId)
+
+// Get escrow address for specific fill
+const escrowAddress = order.getSrcEscrowAddress(
+  programId,
+  resolverAddress,
+  hashLock,
+  fillAmount
+)
+
+// Get associated token account for escrow
+const escrowATA = order.getSrcEscrowATA({
+  programId,
+  taker: resolverAddress,
+  fillAmount,
+  hashLock,
+  tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID
+})
+
+// Calculate taking amount with auction
+const takingAmount = order.calcTakingAmount(
+  makingAmount,
+  executionTime,
+  0n // blockBaseFee not used on Solana
+)
+
+// Serialize for submission
+const orderJSON = order.toJSON()
+```
+
+### Publishing Solana Orders
+
+Solana orders must be published both off-chain and on-chain:
+
+```typescript
+import { SvmSrcEscrowFactory } from '@1inch/cross-chain-sdk'
+import { web3 } from '@coral-xyz/anchor'
+
+// 1. Announce to relayer (off-chain)
+const orderHash = await sdk.announceOrder(order, quoteId, secretHashes)
+
+// 2. Create on-chain instruction
+const ix = SvmSrcEscrowFactory.DEFAULT.createOrder(order, {
+  srcTokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID
+})
+
+// 3. Build and send transaction
+const tx = new web3.Transaction().add({
+  data: ix.data,
+  programId: new web3.PublicKey(ix.programId.toBuffer()),
+  keys: ix.accounts.map(a => ({
+    isSigner: a.isSigner,
+    isWritable: a.isWritable,
+    pubkey: new web3.PublicKey(a.pubkey.toBuffer())
+  }))
+})
+
+const signature = await connection.sendTransaction(tx, [signer])
+```
+
+<Warning>
+Solana orders are only active after the on-chain transaction confirms. Make sure to wait for confirmation before expecting resolver activity.
+</Warning>
+
+## Order Configuration Options
+
+### Multiple Fills
+
+Allow the order to be filled by multiple resolvers in separate transactions:
+
+```typescript
+// EVM
+const order = EvmCrossChainOrder.new(
+  /* ... */,
+  { allowMultipleFills: true }
+)
+
+// Solana
+const order = SvmCrossChainOrder.new(
+  /* ... */,
+  { allowMultipleFills: true }
+)
+```
+
+When enabled:
+- Order can be partially filled by different resolvers
+- Each fill uses a different secret from the merkle tree
+- Hash lock must use `forMultipleFills()` with sufficient secrets
+
+### Partial Fills (EVM only)
+
+Allow a single resolver to fill less than the full amount:
+
+```typescript
+const order = EvmCrossChainOrder.new(
+  /* ... */,
+  { allowPartialFills: true }
+)
+```
+
+### Resolver Whitelist (EVM only)
+
+Restrict who can fill the order during specific time periods:
+
+```typescript
+const order = EvmCrossChainOrder.new(
+  /* ... */,
+  {
+    auction: auctionDetails,
+    whitelist: [
+      {
+        address: EvmAddress.fromString('0x...'),
+        allowFrom: 0n  // Can fill immediately
+      },
+      {
+        address: EvmAddress.fromString('0x...'),
+        allowFrom: 60n // Can fill after 60 seconds
+      }
+    ]
+  }
+)
+```
+
+### Permits (EVM only)
+
+Include permit signatures to avoid separate approval transactions:
+
+```typescript
+// Standard ERC20 permit
+const order = EvmCrossChainOrder.new(
+  /* ... */,
+  { permit: permitSignature }
+)
+
+// Permit2
+const order = EvmCrossChainOrder.new(
+  /* ... */,
+  { 
+    permit: permit2Signature,
+    enablePermit2: true 
+  }
+)
+```
+
+## Common Order Operations
+
+### Getting Multiple Fill Index
+
+Determine which secret index to use for a specific fill amount:
+
+```typescript
+const fillIdx = order.getMultipleFillIdx(
+  fillAmount,
+  remainingAmount
+)
+
+const secret = secrets[fillIdx]
+const secretHash = HashLock.hashSecret(secret)
+const leaves = HashLock.getMerkleLeaves(secrets)
+const proof = HashLock.getProof(leaves, fillIdx)
+```
+
+From `src/cross-chain-order/base-order.ts:112`:
+
+```typescript
+public getMultipleFillIdx(
+    fillAmount: bigint,
+    remainingAmount = this.makingAmount
+): number {
+    assert(this.multipleFillsAllowed, 'Multiple fills disabled for order')
+    const partsCount = this.hashLock.getPartsCount()
+
+    const calculatedIndex =
+        ((this.makingAmount - remainingAmount + fillAmount - 1n) *
+            partsCount) /
+        this.makingAmount
+
+    if (remainingAmount === fillAmount) {
+        return Number(calculatedIndex + 1n)
+    }
+
+    return Number(calculatedIndex)
+}
+```
+
+### Monitoring Order Status
+
+```typescript
+// Poll for status changes
+while (true) {
+  const { status, fills } = await sdk.getOrderStatus(orderHash)
+  
+  console.log('Status:', status)
+  console.log('Fills:', fills)
+  
+  if (
+    status === OrderStatus.Executed ||
+    status === OrderStatus.Expired ||
+    status === OrderStatus.Refunded
+  ) {
+    break
+  }
+  
+  await sleep(5000)
+}
+```
+
+### Handling Secret Submission
+
+```typescript
+const alreadyShared = new Set<number>()
+
+while (orderActive) {
+  const ready = await sdk.getReadyToAcceptSecretFills(orderHash)
+  
+  for (const { idx, srcEscrow, dstEscrow } of ready.fills) {
+    if (alreadyShared.has(idx)) continue
+    
+    // Verify escrow addresses and amounts
+    const isValid = await verifyEscrows(srcEscrow, dstEscrow)
+    
+    if (isValid) {
+      await sdk.submitSecret(orderHash, secrets[idx])
+      alreadyShared.add(idx)
+      console.log(`Shared secret ${idx}`)
+    }
+  }
+  
+  await sleep(5000)
+}
+```
+
+## Best Practices
+
+<Accordion title="Always verify escrows before revealing secrets">
+  Before submitting secrets, verify:
+  - Escrow addresses match expected values
+  - Token addresses are correct
+  - Amounts match your order parameters
+  - Time locks provide sufficient time
+  
+  Once a secret is revealed on-chain, anyone can use it.
+</Accordion>
+
+<Accordion title="Use recommended presets for production">
+  The SDK provides battle-tested presets (fast, medium, slow) that balance:
+  - Execution speed
+  - Number of secrets required
+  - Time lock durations
+  - Safety deposit amounts
+  
+  Only use custom configurations if you understand the tradeoffs.
+</Accordion>
+
+<Accordion title="Handle multiple fills correctly">
+  When `allowMultipleFills` is enabled:
+  - Generate enough secrets (check `preset.secretsCount`)
+  - Use merkle tree hash lock (`forMultipleFills`)
+  - Track which secrets have been shared
+  - Use `getMultipleFillIdx()` to determine the correct secret
+</Accordion>
+
+<Accordion title="Monitor order status actively">
+  Don't rely on assumptions about order completion:
+  - Poll `getOrderStatus()` regularly
+  - Check `getReadyToAcceptSecretFills()` for escrow deployments
+  - Handle all terminal states (Executed, Expired, Refunded)
+  - Implement retry logic for secret submission
+</Accordion>
+
+## Learn More
+
+- [Atomic Swaps](./atomic-swaps) - How orders enable trustless swaps
+- [Hash Locks](./hash-locks) - Securing orders with cryptographic commitments
+- [Presets](./presets) - Pre-configured order parameters
+- [Time Locks](./time-locks) - Temporal safety mechanisms in orders

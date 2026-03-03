@@ -1,0 +1,403 @@
+---
+title: 'Types & Interfaces'
+description: 'Common types, interfaces, and enums used across the SDK'
+icon: 'brackets-curly'
+---
+
+## Overview
+
+This page documents the core types, interfaces, and enums used throughout the 1inch Cross-Chain SDK.
+
+## SDK Configuration
+
+### CrossChainSDKConfigParams
+
+Configuration parameters for initializing the Cross-Chain SDK.
+
+```typescript
+type CrossChainSDKConfigParams = {
+  url: string
+  authKey?: string
+  blockchainProvider?: BlockchainProviderConnector
+  httpProvider?: HttpProviderConnector
+}
+```
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `url` | `string` | Yes | API endpoint URL |
+| `authKey` | `string` | No | Authentication key for API access |
+| `blockchainProvider` | `BlockchainProviderConnector` | No | Blockchain provider connector |
+| `httpProvider` | `HttpProviderConnector` | No | HTTP provider connector |
+
+## Quote Parameters
+
+### QuoteParams
+
+Parameters for requesting a cross-chain quote.
+
+```typescript
+type QuoteParams<
+  SrcChain extends SupportedChain = SupportedChain,
+  DstChain extends SupportedChain = SupportedChain
+> = {
+  srcChainId: SrcChain
+  dstChainId: DstChain
+  srcTokenAddress: string
+  dstTokenAddress: string
+  amount: string
+  walletAddress: string
+  enableEstimate?: boolean
+  permit?: string
+  integratorFee?: IntegratorFeeRequest
+  source?: string
+  isPermit2?: boolean
+}
+```
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `srcChainId` | `SupportedChain` | Yes | Source chain ID |
+| `dstChainId` | `SupportedChain` | Yes | Destination chain ID |
+| `srcTokenAddress` | `string` | Yes | Source token address |
+| `dstTokenAddress` | `string` | Yes | Destination token address |
+| `amount` | `string` | Yes | Amount to swap (in token units) |
+| `walletAddress` | `string` | Yes | User's wallet address |
+| `enableEstimate` | `boolean` | No | Enable gas estimation |
+| `permit` | `string` | No | Permit signature |
+| `integratorFee` | `IntegratorFeeRequest` | No | Integrator fee configuration |
+| `source` | `string` | No | Source identifier |
+| `isPermit2` | `boolean` | No | Use Permit2 |
+
+### QuoteCustomPresetParams
+
+Parameters for requesting a quote with a custom preset.
+
+```typescript
+type QuoteCustomPresetParams = {
+  customPreset: CustomPreset
+}
+```
+
+## Order Parameters
+
+### OrderParams
+
+Parameters for creating a cross-chain order.
+
+```typescript
+type OrderParams = {
+  walletAddress: string
+  hashLock: HashLock
+  secretHashes: string[]
+  permit?: string
+  receiver?: string
+  preset?: PresetEnum
+  nonce?: bigint
+  source?: string
+  isPermit2?: boolean
+  customPreset?: CustomPreset
+}
+```
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `walletAddress` | `string` | Yes | User's wallet address |
+| `hashLock` | `HashLock` | Yes | Hash lock for the order |
+| `secretHashes` | `string[]` | Yes | Array of secret hashes |
+| `permit` | `string` | No | Permit signature (without first 20 bytes) |
+| `receiver` | `string` | No | Receiver address (defaults to walletAddress) |
+| `preset` | `PresetEnum` | No | Preset type (defaults to recommended) |
+| `nonce` | `bigint` | No | Unique nonce for the wallet |
+| `source` | `string` | No | Source identifier |
+| `isPermit2` | `boolean` | No | Use Permit2 |
+| `customPreset` | `CustomPreset` | No | Custom preset configuration |
+
+### OrderInfo
+
+Information about a created order.
+
+```typescript
+type OrderInfo = {
+  order: LimitOrderV4Struct
+  signature: string
+  quoteId: string
+  orderHash: string
+  extension: string
+}
+```
+
+### PreparedOrder
+
+A prepared order ready for submission.
+
+```typescript
+type PreparedOrder = {
+  order: EvmCrossChainOrder | SvmCrossChainOrder
+  hash: string
+  quoteId: string
+}
+```
+
+## Preset Types
+
+### PresetEnum
+
+Available preset options for cross-chain swaps.
+
+```typescript
+enum PresetEnum {
+  fast = 'fast',
+  medium = 'medium',
+  slow = 'slow',
+  custom = 'custom'
+}
+```
+
+| Value | Description |
+|-------|-------------|
+| `fast` | Fastest execution with higher costs |
+| `medium` | Balanced speed and cost |
+| `slow` | Lower cost with longer execution time |
+| `custom` | User-defined custom preset |
+
+### CustomPreset
+
+Configuration for a custom preset.
+
+```typescript
+type CustomPreset = {
+  auctionDuration: number
+  auctionStartAmount: string
+  auctionEndAmount: string
+  points?: CustomPresetPoint[]
+}
+```
+
+### CustomPresetPoint
+
+```typescript
+type CustomPresetPoint = {
+  toTokenAmount: string
+  delay: number
+}
+```
+
+## Order Status
+
+### OrderStatus
+
+Possible statuses for a cross-chain order.
+
+```typescript
+enum OrderStatus {
+  Pending = 'pending',
+  Executed = 'executed',
+  Expired = 'expired',
+  Cancelled = 'cancelled',
+  Refunding = 'refunding',
+  Refunded = 'refunded'
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| `Pending` | Order is pending execution |
+| `Executed` | Order has been successfully executed |
+| `Expired` | Order has expired |
+| `Cancelled` | Order has been cancelled |
+| `Refunding` | Order is being refunded |
+| `Refunded` | Order has been refunded |
+
+### FillStatus
+
+Status of an order fill.
+
+```typescript
+enum FillStatus {
+  Pending = 'pending',
+  Executed = 'executed',
+  Refunding = 'refunding',
+  Refunded = 'refunded'
+}
+```
+
+### ValidationStatus
+
+Validation status for an order.
+
+```typescript
+enum ValidationStatus {
+  Valid = 'valid',
+  OrderPredicateReturnedFalse = 'order-predicate-returned-false',
+  NotEnoughBalance = 'not-enough-balance',
+  NotEnoughAllowance = 'not-enough-allowance',
+  InvalidPermitSignature = 'invalid-permit-signature',
+  InvalidPermitSpender = 'invalid-permit-spender',
+  InvalidPermitSigner = 'invalid-permit-signer',
+  InvalidSignature = 'invalid-signature',
+  FailedToParsePermitDetails = 'failed-to-parse-permit-details',
+  UnknownPermitVersion = 'unknown-permit-version',
+  WrongEpochManagerAndBitInvalidator = 'wrong-epoch-manager-and-bit-invalidator',
+  FailedToDecodeRemainingMakerAmount = 'failed-to-decode-remaining',
+  UnknownFailure = 'unknown-failure'
+}
+```
+
+## Escrow Events
+
+### EscrowEventSide
+
+```typescript
+enum EscrowEventSide {
+  Src = 'src',
+  Dst = 'dst'
+}
+```
+
+### EscrowEventAction
+
+```typescript
+enum EscrowEventAction {
+  SrcEscrowCreated = 'src_escrow_created',
+  DstEscrowCreated = 'dst_escrow_created',
+  Withdrawn = 'withdrawn',
+  FundsRescued = 'funds_rescued',
+  EscrowCancelled = 'escrow_cancelled'
+}
+```
+
+### EscrowEventData
+
+```typescript
+type EscrowEventData = {
+  transactionHash: string
+  escrow: string
+  side: EscrowEventSide
+  action: EscrowEventAction
+  blockTimestamp: number // Unix timestamp in ms
+}
+```
+
+## Fee Configuration
+
+### IntegratorFeeRequest
+
+Integrator fee parameters for SDK requests.
+
+```typescript
+type IntegratorFeeRequest = {
+  receiver: EvmAddress  // Address which will receive integrator's portion
+  value: Bps            // Fee in basis points (1% = 100 bps)
+}
+```
+
+### IntegratorFeeResponse
+
+Integrator fee parameters from API response.
+
+```typescript
+type IntegratorFeeResponse = {
+  receiver: EvmAddress  // Address receiving fee share
+  value: Bps            // Total fee in basis points
+  share: Bps            // Integrator's share of the fee
+}
+```
+
+### TakingFeeInfo
+
+```typescript
+type TakingFeeInfo = {
+  takingFeeBps: number        // 100 = 1%
+  takingFeeReceiver: string
+}
+```
+
+## Pagination
+
+### PaginationParams
+
+```typescript
+type PaginationParams = {
+  page?: number
+  limit?: number  // Between 1 and 500
+}
+```
+
+### PaginationOutput
+
+```typescript
+type PaginationOutput<T> = {
+  meta: PaginationMeta
+  items: T[]
+}
+```
+
+### PaginationMeta
+
+```typescript
+type PaginationMeta = {
+  totalItems: number
+  itemsPerPage: number
+  totalPages: number
+  currentPage: number
+}
+```
+
+## API Version
+
+### ApiVersion
+
+```typescript
+enum ApiVersion {
+  V1_1 = '1.1',
+  V1_2 = '1.2'
+}
+```
+
+## Type Utilities
+
+### FixedLengthArray
+
+Utility type for fixed-length arrays.
+
+```typescript
+type FixedLengthArray<T, N extends number> = ...
+```
+
+### AddressForChain
+
+Utility type that returns the appropriate address type for a chain.
+
+```typescript
+type AddressForChain<Chain extends SupportedChain> =
+  Chain extends EvmChain
+    ? EvmAddress
+    : Chain extends SolanaChain
+      ? SolanaAddress
+      : never
+```
+
+## Example Usage
+
+```typescript
+import { QuoteParams, OrderParams, PresetEnum, OrderStatus } from '@1inch/cross-chain-sdk'
+
+// Request a quote
+const quoteParams: QuoteParams = {
+  srcChainId: 1,
+  dstChainId: 137,
+  srcTokenAddress: '0x...',
+  dstTokenAddress: '0x...',
+  amount: '1000000000000000000',
+  walletAddress: '0x...'
+}
+
+// Create an order with medium preset
+const orderParams: OrderParams = {
+  walletAddress: '0x...',
+  hashLock: hashLock,
+  secretHashes: ['0x...'],
+  preset: PresetEnum.medium
+}
+```

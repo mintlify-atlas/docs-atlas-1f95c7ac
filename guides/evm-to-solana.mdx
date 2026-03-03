@@ -1,0 +1,344 @@
+---
+title: 'EVM to Solana Swaps'
+description: 'Cross-chain swaps from Ethereum and other EVM chains to Solana'
+---
+
+## Overview
+
+This guide demonstrates how to create atomic swaps from EVM chains (Ethereum, Polygon, BSC, etc.) to Solana using the 1inch Cross-Chain SDK.
+
+## Prerequisites
+
+- Node.js installed (v16 or higher)
+- An API key from the [1inch Developer Portal](https://portal.1inch.dev)
+- A wallet with sufficient EVM token balance and gas
+- Solana wallet address for receiving tokens
+- Token allowance for the Limit Order Protocol contract on the source chain
+
+## Installation
+
+```bash
+npm install @1inch/cross-chain-sdk-solana ethers dotenv
+```
+
+## Complete Example
+
+This example demonstrates swapping 10 USDT from Ethereum to USDT on Solana:
+
+```typescript
+import {
+  NetworkEnum,
+  SDK,
+  SolanaAddress,
+  HashLock,
+  EvmAddress,
+  PrivateKeyProviderConnector,
+  OrderStatus
+} from '@1inch/cross-chain-sdk-solana'
+import { JsonRpcProvider, TransactionRequest, computeAddress } from 'ethers'
+import assert from 'node:assert'
+import { randomBytes } from 'node:crypto'
+import { setTimeout } from 'node:timers/promises'
+import 'dotenv/config'
+
+const authKey = process.env.DEV_PORTAL_API_TOKEN
+assert(authKey, 'please provide auth key in DEV_PORTAL_API_TOKEN env. You can grab it at https://portal.1inch.dev')
+
+const signerPrivateKey = process.env.EVM_PRIVATE_KEY
+assert(signerPrivateKey, 'please provide evm private key of the maker wallet in EVM_PRIVATE_KEY env')
+
+const NODE_URL = 'https://web3.1inch.io/1'
+const ethersRpcProvider = new JsonRpcProvider(NODE_URL)
+
+const ethersProviderConnector = {
+  eth: {
+    call(transactionConfig: TransactionRequest): Promise<string> {
+      return ethersRpcProvider.call(transactionConfig)
+    }
+  },
+  extend(): void {}
+}
+
+const connector = new PrivateKeyProviderConnector(signerPrivateKey, ethersProviderConnector)
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: process.env.DEV_PORTAL_API_TOKEN,
+  blockchainProvider: connector
+})
+
+const maker = computeAddress(signerPrivateKey)
+const receiver = '93FP8NG2JrScb9xzNsJrzAze8gJJtr1TgQWUCHDgP3BW'
+
+const USDT_SOL = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+const USDT_ETHEREUM = '0xdac17f958d2ee523a2206206994597c13d831ec7'
+const amount = 10_000_000n // 10 USDT
+const srcToken = EvmAddress.fromString(USDT_ETHEREUM)
+const dstToken = SolanaAddress.fromString(USDT_SOL) // use SolanaAddress.NATIVE for native token
+const srcChainId = NetworkEnum.ETHEREUM
+const dstChainId = NetworkEnum.SOLANA
+
+async function main(): Promise<void> {
+  const quote = await sdk.getQuote({
+    amount: amount.toString(),
+    srcChainId,
+    dstChainId,
+    srcTokenAddress: srcToken.toString(),
+    dstTokenAddress: dstToken.toString(),
+    enableEstimate: true,
+    walletAddress: maker
+  })
+
+  const preset = quote.getPreset(quote.recommendedPreset)
+  assert(quote.quoteId)
+  console.log('got preset', preset)
+
+  const secrets = Array.from({ length: preset.secretsCount }).map(getSecret)
+  const secretHashes = secrets.map(HashLock.hashSecret)
+  const leaves = HashLock.getMerkleLeaves(secrets)
+
+  const hashLock = secrets.length > 1 ? HashLock.forMultipleFills(leaves) : HashLock.forSingleFill(secrets[0])
+
+  const order = quote.createEvmOrder({
+    hashLock,
+    receiver: SolanaAddress.fromString(receiver),
+    preset: quote.recommendedPreset
+  })
+
+  const { orderHash } = await sdk.submitOrder(srcChainId, order, quote.quoteId, secretHashes)
+
+  console.log('submit order to relayer', orderHash)
+
+  const alreadyShared = new Set<number>()
+
+  while (true) {
+    const readyToAcceptSecretes = await sdk.getReadyToAcceptSecretFills(orderHash)
+
+    const idxes = readyToAcceptSecretes.fills.map((f) => f.idx)
+
+    for (const idx of idxes) {
+      if (!alreadyShared.has(idx)) {
+        // it is responsibility of the client to check whether is safe to share secret (check escrow addresses and so on)
+        await sdk.submitSecret(orderHash, secrets[idx]).catch((err) => console.error('failed to submit secret', err))
+        alreadyShared.add(idx)
+
+        console.log('submitted secret', secrets[idx])
+      }
+    }
+
+    // check if order finished
+    const { status } = await sdk.getOrderStatus(orderHash)
+
+    if (status === OrderStatus.Executed || status === OrderStatus.Expired || status === OrderStatus.Refunded) {
+      break
+    }
+
+    await setTimeout(5000)
+  }
+
+  const statusResponse = await sdk.getOrderStatus(orderHash)
+  console.log(statusResponse)
+}
+
+function getSecret(): string {
+  return '0x' + randomBytes(32).toString('hex')
+}
+
+main()
+```
+
+## Step-by-Step Breakdown
+
+<Steps>
+  <Step title="Setup Environment">
+    Create a `.env` file with your credentials:
+
+    ```bash
+    DEV_PORTAL_API_TOKEN=your-api-key
+    EVM_PRIVATE_KEY=0x...
+    ```
+
+    <Warning>
+    Never commit `.env` files to version control.
+    </Warning>
+  </Step>
+
+  <Step title="Initialize SDK with Ethers Provider">
+    The SDK works with ethers.js v6+:
+
+    ```typescript
+    const ethersRpcProvider = new JsonRpcProvider(NODE_URL)
+
+    const ethersProviderConnector = {
+      eth: {
+        call(transactionConfig: TransactionRequest): Promise<string> {
+          return ethersRpcProvider.call(transactionConfig)
+        }
+      },
+      extend(): void {}
+    }
+
+    const connector = new PrivateKeyProviderConnector(
+      signerPrivateKey,
+      ethersProviderConnector
+    )
+
+    const sdk = new SDK({
+      url: 'https://api.1inch.com/fusion-plus',
+      authKey,
+      blockchainProvider: connector
+    })
+    ```
+  </Step>
+
+  <Step title="Configure Addresses">
+    Set up source EVM token and destination Solana token:
+
+    ```typescript
+    const srcToken = EvmAddress.fromString(USDT_ETHEREUM)
+    const dstToken = SolanaAddress.fromString(USDT_SOL)
+    
+    // For native SOL, use:
+    // const dstToken = SolanaAddress.NATIVE
+
+    const receiver = '93FP8NG2JrScb9xzNsJrzAze8gJJtr1TgQWUCHDgP3BW' // Solana address
+    ```
+  </Step>
+
+  <Step title="Create Cross-Chain Order">
+    Use `createEvmOrder` and specify Solana receiver:
+
+    ```typescript
+    const order = quote.createEvmOrder({
+      hashLock,
+      receiver: SolanaAddress.fromString(receiver),
+      preset: quote.recommendedPreset
+    })
+
+    const { orderHash } = await sdk.submitOrder(
+      srcChainId,
+      order,
+      quote.quoteId,
+      secretHashes
+    )
+    ```
+  </Step>
+
+  <Step title="Monitor and Complete Swap">
+    Track secret submission and wait for completion:
+
+    ```typescript
+    const alreadyShared = new Set<number>()
+
+    while (true) {
+      const readyToAcceptSecretes = await sdk.getReadyToAcceptSecretFills(orderHash)
+
+      for (const idx of readyToAcceptSecretes.fills.map((f) => f.idx)) {
+        if (!alreadyShared.has(idx)) {
+          await sdk.submitSecret(orderHash, secrets[idx])
+            .catch((err) => console.error('failed to submit secret', err))
+          alreadyShared.add(idx)
+        }
+      }
+
+      const { status } = await sdk.getOrderStatus(orderHash)
+
+      if (
+        status === OrderStatus.Executed ||
+        status === OrderStatus.Expired ||
+        status === OrderStatus.Refunded
+      ) {
+        break
+      }
+
+      await setTimeout(5000)
+    }
+    ```
+
+    <Tip>
+    Use a `Set` to track submitted secrets and avoid duplicate submissions.
+    </Tip>
+  </Step>
+</Steps>
+
+## Solana Address Formats
+
+Solana uses Base58 encoding for addresses:
+
+```typescript
+// SPL Token address
+const usdtSol = SolanaAddress.fromString('Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB')
+
+// Native SOL
+const nativeSol = SolanaAddress.NATIVE
+
+// Wallet address
+const receiver = '93FP8NG2JrScb9xzNsJrzAze8gJJtr1TgQWUCHDgP3BW'
+```
+
+## Common Solana Tokens
+
+| Token | Address |
+|-------|----------|
+| USDT | `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB` |
+| USDC | `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` |
+| Native SOL | Use `SolanaAddress.NATIVE` |
+
+## Security Considerations
+
+<Warning>
+**Critical: Secret Management**
+
+Before sharing secrets in production:
+
+1. Verify the escrow contract addresses
+2. Check that tokens are locked correctly
+3. Validate destination chain deployment
+4. Implement timeout mechanisms
+5. Use error handling for secret submission
+</Warning>
+
+## Error Handling
+
+Implement robust error handling for secret submission:
+
+```typescript
+for (const idx of idxes) {
+  if (!alreadyShared.has(idx)) {
+    try {
+      await sdk.submitSecret(orderHash, secrets[idx])
+      alreadyShared.add(idx)
+      console.log('submitted secret', idx)
+    } catch (err) {
+      console.error(`failed to submit secret ${idx}:`, err)
+      // Implement retry logic or alerting
+    }
+  }
+}
+```
+
+## Troubleshooting
+
+### Quote Not Available
+
+- Verify both chains are supported
+- Check token addresses are correct
+- Ensure sufficient liquidity exists
+
+### Order Not Executing
+
+- Confirm token allowance is set
+- Check wallet balance is sufficient
+- Monitor gas prices on source chain
+
+### Solana Transaction Failures
+
+- Verify receiver address is valid Base58
+- Check Solana network status
+- Ensure destination token account exists or can be created
+
+## Next Steps
+
+- Explore [Solana to EVM swaps](/guides/solana-to-evm)
+- Learn about [Order Management](/guides/order-management)
+- See [WebSocket API](/guides/websocket-api) for real-time updates

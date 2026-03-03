@@ -1,0 +1,565 @@
+---
+title: Presets
+description: Understanding presets - pre-configured swap parameters for different speed and security tradeoffs
+---
+
+# Presets
+
+Presets are pre-configured parameter sets that determine how your cross-chain swap executes. They balance execution speed, security, and complexity to provide optimal swap experiences for different use cases.
+
+## What are Presets?
+
+A preset bundles together:
+- **Auction parameters**: How the exchange rate changes over time
+- **Secret count**: Number of secrets required for hash lock
+- **Time locks**: Duration of each swap phase
+- **Fill options**: Whether partial/multiple fills are allowed
+- **Safety deposits**: Required collateral amounts
+
+<Info>
+Think of presets as "swap profiles" - choosing fast prioritizes quick execution, while slow provides more flexibility and potentially better rates.
+</Info>
+
+## Available Presets
+
+The SDK provides three standard presets:
+
+### Fast Preset
+
+```typescript
+import { PresetEnum } from '@1inch/cross-chain-sdk'
+
+const preset = PresetEnum.fast
+```
+
+**Characteristics:**
+- Quickest execution time
+- Single secret (no merkle tree needed)
+- Shorter auction duration
+- Higher initial rate to attract resolvers quickly
+- Single fill only (no partial fills)
+
+**Best for:**
+- Time-sensitive swaps
+- Users who want simplicity
+- Smaller swap amounts
+- When you need quick settlement
+
+### Medium Preset
+
+```typescript
+const preset = PresetEnum.medium
+```
+
+**Characteristics:**
+- Balanced execution time
+- Multiple secrets (typically 3)
+- Moderate auction duration
+- Balanced initial rate
+- Multiple fills allowed
+
+**Best for:**
+- Most general use cases
+- Moderate swap amounts
+- When you want flexibility without too much complexity
+- Default choice for most integrations
+
+### Slow Preset
+
+```typescript
+const preset = PresetEnum.slow
+```
+
+**Characteristics:**
+- Longer execution time
+- More secrets (typically 5)
+- Extended auction duration
+- Better final rates
+- Multiple fills allowed
+- More time for competitive bidding
+
+**Best for:**
+- Large swap amounts
+- When optimizing for best rate
+- Users who can wait for execution
+- Maximum flexibility in partial fills
+
+## Preset Structure
+
+From `src/api/quoter/types.ts:145`:
+
+```typescript
+export type PresetData = {
+    auctionDuration: number        // How long auction runs (seconds)
+    startAuctionIn: number         // Delay before auction starts
+    initialRateBump: number        // Initial rate improvement (%)
+    auctionStartAmount: string     // Starting destination amount
+    startAmount: string            // Amount including gas bump
+    auctionEndAmount: string       // Final destination amount
+    costInDstToken: string         // Estimated gas cost
+    points: AuctionPoint[]         // Rate curve definition
+    allowPartialFills: boolean     // Can be partially filled
+    allowMultipleFills: boolean    // Can be filled by multiple resolvers
+    gasCost: {
+        gasBumpEstimate: number
+        gasPriceEstimate: string
+    }
+    exclusiveResolver: string | null  // Optional exclusive resolver
+    secretsCount: number           // How many secrets to generate
+}
+```
+
+## Using Presets
+
+### Getting Preset from Quote
+
+When you request a quote, the API returns all available presets:
+
+```typescript
+const quote = await sdk.getQuote({
+  amount: '1000000',
+  srcChainId: NetworkEnum.ETHEREUM,
+  dstChainId: NetworkEnum.BINANCE,
+  srcTokenAddress: '0x...',
+  dstTokenAddress: '0x...',
+  walletAddress: '0x...'
+})
+
+// Access all presets
+const fastPreset = quote.getPreset(PresetEnum.fast)
+const mediumPreset = quote.getPreset(PresetEnum.medium)
+const slowPreset = quote.getPreset(PresetEnum.slow)
+
+// Use recommended preset
+const recommendedPreset = quote.getPreset(quote.recommendedPreset)
+```
+
+### Preset Properties
+
+From `src/api/quoter/preset.ts:8`:
+
+```typescript
+import { Preset } from '@1inch/cross-chain-sdk'
+
+const preset = quote.getPreset(PresetEnum.fast)
+
+// Amounts
+preset.startAmount          // Initial destination amount (with gas)
+preset.auctionStartAmount   // Auction start amount (before gas bump)
+preset.auctionEndAmount     // Final auction amount
+preset.costInDstToken       // Estimated gas cost in destination token
+
+// Timing
+preset.auctionDuration      // How long auction runs (bigint seconds)
+preset.startAuctionIn       // Delay before auction starts (bigint seconds)
+
+// Auction curve
+preset.initialRateBump      // Initial rate improvement (number %)
+preset.points               // Array of AuctionPoint objects
+
+// Gas estimation
+preset.gasCostInfo          // { gasBumpEstimate, gasPriceEstimate }
+
+// Resolver restrictions
+preset.exclusiveResolver    // EvmAddress or undefined
+
+// Fill options
+preset.allowPartialFills    // boolean
+preset.allowMultipleFills   // boolean
+
+// Hash lock
+preset.secretsCount         // Number of secrets to generate
+```
+
+### Generating Secrets Based on Preset
+
+The most important preset property is `secretsCount`:
+
+```typescript
+import { randomBytes } from 'crypto'
+
+const preset = quote.getPreset(PresetEnum.medium)
+
+// Generate exactly the right number of secrets
+const secrets = Array.from({ length: preset.secretsCount }).map(
+  () => '0x' + randomBytes(32).toString('hex')
+)
+
+// Create appropriate hash lock
+const hashLock = secrets.length === 1
+  ? HashLock.forSingleFill(secrets[0])
+  : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+```
+
+<Warning>
+Always use `preset.secretsCount` to determine how many secrets to generate. Using too few will cause order creation to fail. Using too many wastes gas and adds unnecessary complexity.
+</Warning>
+
+## Secrets Count by Preset
+
+The number of secrets varies by preset to match the fill strategy:
+
+```typescript
+// Fast preset - single fill
+const fast = quote.getPreset(PresetEnum.fast)
+fast.secretsCount === 1  // true
+fast.allowMultipleFills === false  // true
+
+// Medium preset - multiple fills
+const medium = quote.getPreset(PresetEnum.medium)
+medium.secretsCount === 3  // typically
+medium.allowMultipleFills === true  // true
+
+// Slow preset - more fills
+const slow = quote.getPreset(PresetEnum.slow)
+slow.secretsCount === 5  // typically
+slow.allowMultipleFills === true  // true
+```
+
+<Note>
+The exact `secretsCount` may vary based on market conditions and route optimization. Always read it from the preset rather than hardcoding values.
+</Note>
+
+## Auction Mechanics
+
+Presets define how the exchange rate improves over time to attract resolvers.
+
+### Auction Timeline
+
+```typescript
+const preset = quote.getPreset(PresetEnum.medium)
+
+// Current time
+const now = Math.floor(Date.now() / 1000)
+
+// Auction starts after delay
+const auctionStart = now + Number(preset.startAuctionIn)
+
+// Auction ends after duration
+const auctionEnd = auctionStart + Number(preset.auctionDuration)
+
+// Order expires after additional delay
+const orderDeadline = auctionEnd + orderExpirationDelay
+```
+
+### Rate Curve
+
+The auction uses a curve defined by points:
+
+```typescript
+type AuctionPoint = {
+  delay: number           // Seconds from auction start
+  toTokenAmount: string   // Destination amount at this point
+}
+
+// Example curve
+preset.points = [
+  { delay: 0, toTokenAmount: '1000000' },      // Start
+  { delay: 30, toTokenAmount: '1050000' },     // +5% after 30s
+  { delay: 60, toTokenAmount: '1100000' }      // +10% after 60s
+]
+```
+
+The rate improves over time, incentivizing early execution while ensuring eventual fulfillment:
+
+```typescript
+// At auction start
+order.calcTakingAmount(makingAmount, auctionStart) 
+// Returns: auctionStartAmount
+
+// 30 seconds later
+order.calcTakingAmount(makingAmount, auctionStart + 30n)
+// Returns: interpolated amount based on points
+
+// At auction end
+order.calcTakingAmount(makingAmount, auctionEnd)
+// Returns: auctionEndAmount
+```
+
+### Creating Auction Details
+
+Presets can create AuctionDetails objects:
+
+```typescript
+// From src/api/quoter/preset.ts:60
+const auctionDetails = preset.createAuctionDetails(
+  additionalWaitPeriod // optional delay in seconds
+)
+
+// The auction details contain:
+auctionDetails.startTime        // When auction begins
+auctionDetails.duration         // How long it runs
+auctionDetails.initialRateBump  // Initial rate improvement
+auctionDetails.points           // Rate curve
+auctionDetails.gasCost          // Gas estimation
+```
+
+## Time Locks and Presets
+
+Presets influence time lock durations through auction timing:
+
+```typescript
+// Fast preset - shorter auction = shorter time locks needed
+const fastPreset = quote.getPreset(PresetEnum.fast)
+fastPreset.auctionDuration  // e.g., 60 seconds
+
+// Slow preset - longer auction = longer time locks needed
+const slowPreset = quote.getPreset(PresetEnum.slow)
+slowPreset.auctionDuration  // e.g., 300 seconds
+```
+
+The quote response includes time locks calculated for the preset:
+
+```typescript
+const quote = await sdk.getQuote(params)
+
+// Time locks are optimized for the selected preset
+const timeLocks = TimeLocks.new({
+  srcWithdrawal: BigInt(quote.timeLocks.srcWithdrawal),
+  srcPublicWithdrawal: BigInt(quote.timeLocks.srcPublicWithdrawal),
+  srcCancellation: BigInt(quote.timeLocks.srcCancellation),
+  srcPublicCancellation: BigInt(quote.timeLocks.srcPublicCancellation),
+  dstWithdrawal: BigInt(quote.timeLocks.dstWithdrawal),
+  dstPublicWithdrawal: BigInt(quote.timeLocks.dstPublicWithdrawal),
+  dstCancellation: BigInt(quote.timeLocks.dstCancellation)
+})
+```
+
+See [Time Locks](./time-locks) for detailed information.
+
+## Choosing the Right Preset
+
+### Decision Matrix
+
+| Factor | Fast | Medium | Slow |
+|--------|------|--------|------|
+| **Execution Speed** | Fastest | Moderate | Slower |
+| **Best Rate** | Lower | Balanced | Higher |
+| **Complexity** | Simple | Moderate | Complex |
+| **Secrets** | 1 | ~3 | ~5 |
+| **Partial Fills** | No | Yes | Yes |
+| **Swap Size** | Small | Medium | Large |
+
+### Use Case Examples
+
+```typescript
+// Quick arbitrage - use fast
+const arbitrageQuote = await sdk.getQuote(params)
+const { order } = await sdk.createOrder(arbitrageQuote, {
+  preset: PresetEnum.fast,
+  // ... other params
+})
+
+// Regular user swap - use recommended
+const userQuote = await sdk.getQuote(params)
+const { order } = await sdk.createOrder(userQuote, {
+  preset: userQuote.recommendedPreset,  // Let SDK decide
+  // ... other params
+})
+
+// Large institutional swap - use slow
+const whaleQuote = await sdk.getQuote({ amount: '1000000000000', ...params })
+const { order } = await sdk.createOrder(whaleQuote, {
+  preset: PresetEnum.slow,  // Optimize for rate
+  // ... other params
+})
+```
+
+## Custom Presets
+
+For advanced use cases, you can create custom presets:
+
+```typescript
+import { CustomPreset } from '@1inch/cross-chain-sdk'
+
+const customPreset: CustomPreset = {
+  auctionDuration: 120,           // 2 minutes
+  auctionStartAmount: '1000000',  // Starting amount
+  auctionEndAmount: '1100000',    // Ending amount (+10%)
+  points: [                       // Optional rate curve
+    { toTokenAmount: '1000000', delay: 0 },
+    { toTokenAmount: '1050000', delay: 60 },
+    { toTokenAmount: '1100000', delay: 120 }
+  ]
+}
+
+const quote = await sdk.getQuote({
+  ...params,
+  customPreset
+})
+```
+
+<Warning>
+Custom presets are advanced features. Incorrect configuration can result in:
+- Orders that never fill (poor rates)
+- Security vulnerabilities (insufficient time locks)
+- Excessive gas costs (too many secrets)
+
+Use standard presets unless you have specific requirements.
+</Warning>
+
+## Preset Implementation
+
+The `Preset` class wraps preset data from the API:
+
+```typescript
+// From src/api/quoter/preset.ts:8
+export class Preset {
+    public readonly auctionDuration: bigint
+    public readonly startAuctionIn: bigint
+    public readonly initialRateBump: number
+    public readonly auctionStartAmount: bigint
+    public readonly startAmount: bigint
+    public readonly costInDstToken: bigint
+    public readonly auctionEndAmount: bigint
+    public readonly points: AuctionPoint[]
+    public readonly gasCostInfo: {
+        gasBumpEstimate: bigint
+        gasPriceEstimate: bigint
+    }
+    public readonly exclusiveResolver?: Address
+    public readonly allowPartialFills: boolean
+    public readonly allowMultipleFills: boolean
+    public readonly secretsCount: number
+
+    constructor(preset: PresetData) {
+        this.startAmount = BigInt(preset.startAmount)
+        this.secretsCount = preset.secretsCount
+        this.costInDstToken = BigInt(preset.costInDstToken)
+        this.auctionDuration = BigInt(preset.auctionDuration)
+        this.startAuctionIn = BigInt(preset.startAuctionIn)
+        this.initialRateBump = preset.initialRateBump
+        this.auctionStartAmount = BigInt(preset.auctionStartAmount)
+        this.auctionEndAmount = BigInt(preset.auctionEndAmount)
+        this.points = preset.points
+        this.gasCostInfo = {
+            gasPriceEstimate: BigInt(preset.gasCost?.gasPriceEstimate || 0n),
+            gasBumpEstimate: BigInt(preset.gasCost?.gasBumpEstimate || 0n)
+        }
+        this.exclusiveResolver = preset.exclusiveResolver
+            ? Address.fromString(preset.exclusiveResolver)
+            : undefined
+        this.allowPartialFills = preset.allowPartialFills
+        this.allowMultipleFills = preset.allowMultipleFills
+    }
+}
+```
+
+## Complete Example
+
+Here's a complete flow using presets:
+
+```typescript
+import { 
+  SDK, 
+  HashLock, 
+  NetworkEnum, 
+  PresetEnum 
+} from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key'
+})
+
+// 1. Get quote with all presets
+const quote = await sdk.getQuote({
+  amount: '1000000',
+  srcChainId: NetworkEnum.ETHEREUM,
+  dstChainId: NetworkEnum.BINANCE,
+  srcTokenAddress: '0x...',
+  dstTokenAddress: '0x...',
+  walletAddress: '0x...'
+})
+
+// 2. Choose preset based on use case
+const selectedPreset = PresetEnum.fast // or use quote.recommendedPreset
+const preset = quote.getPreset(selectedPreset)
+
+console.log('Preset info:', {
+  secretsCount: preset.secretsCount,
+  duration: preset.auctionDuration,
+  startAmount: preset.auctionStartAmount,
+  endAmount: preset.auctionEndAmount,
+  allowMultipleFills: preset.allowMultipleFills
+})
+
+// 3. Generate correct number of secrets
+const secrets = Array.from({ length: preset.secretsCount }).map(
+  () => '0x' + randomBytes(32).toString('hex')
+)
+
+// 4. Create hash lock based on secret count
+const hashLock = secrets.length === 1
+  ? HashLock.forSingleFill(secrets[0])
+  : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+const secretHashes = secrets.map(s => HashLock.hashSecret(s))
+
+// 5. Create order with preset
+const { hash, order } = await sdk.createOrder(quote, {
+  walletAddress: '0x...',
+  hashLock,
+  preset: selectedPreset,
+  source: 'my-integration',
+  secretHashes
+})
+
+console.log('Order created:', hash)
+console.log('Auction starts at:', order.auctionStartTime)
+console.log('Auction ends at:', order.auctionEndTime)
+console.log('Order deadline:', order.deadline)
+```
+
+## FAQ
+
+<Accordion title="Can I change the preset after creating an order?">
+  No. Presets determine fundamental order parameters like hash locks, time locks, and auction curves. These are committed when the order is signed and cannot be changed.
+  
+  You must cancel the existing order and create a new one with a different preset.
+</Accordion>
+
+<Accordion title="What happens if I use the wrong number of secrets?">
+  If you generate fewer secrets than `preset.secretsCount`:
+  - Order creation will fail
+  - Hash lock won't match expected format
+  
+  If you generate more secrets than needed:
+  - Order creation succeeds but extra secrets are wasted
+  - Increases complexity for no benefit
+  
+  Always use exactly `preset.secretsCount` secrets.
+</Accordion>
+
+<Accordion title="Why does the fast preset have only 1 secret?">
+  Fast presets optimize for quick execution:
+  - Single secret = no merkle tree complexity
+  - Single fill only = simpler resolver logic
+  - Faster on-chain verification
+  - Lower gas costs
+  
+  This makes the order more attractive to resolvers who want quick, simple fills.
+</Accordion>
+
+<Accordion title="How does the SDK choose the recommended preset?">
+  The backend analyzes:
+  - Swap amount relative to liquidity
+  - Current network congestion
+  - Historical execution data
+  - Route complexity
+  
+  Generally:
+  - Small amounts: Fast
+  - Medium amounts: Medium
+  - Large amounts: Slow
+  
+  But market conditions may override these defaults.
+</Accordion>
+
+## Learn More
+
+- [Atomic Swaps](./atomic-swaps) - How presets fit into the swap flow
+- [Hash Locks](./hash-locks) - Understanding secret count implications
+- [Orders](./orders) - Using presets in order creation
+- [Time Locks](./time-locks) - How time locks relate to auction duration

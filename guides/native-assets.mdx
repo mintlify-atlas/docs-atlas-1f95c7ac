@@ -1,0 +1,436 @@
+---
+title: 'Native Asset Swaps'
+description: 'Cross-chain swaps with native assets (ETH, BNB, AVAX, SOL, etc.)'
+---
+
+## Overview
+
+This guide demonstrates how to swap native blockchain assets (ETH, BNB, AVAX, MATIC, SOL) across chains. Native asset orders require special handling and an additional on-chain transaction.
+
+<Warning>
+Native asset orders must be submitted both to the relayer AND published on-chain using `NativeOrdersFactory`.
+</Warning>
+
+## Prerequisites
+
+- Node.js installed (v16 or higher)
+- An API key from the [1inch Developer Portal](https://portal.1inch.dev)
+- Wallet with sufficient native token balance
+- `ethers` v6 for transaction handling
+
+## Installation
+
+```bash
+npm install @1inch/cross-chain-sdk ethers
+```
+
+## Complete Example
+
+This example demonstrates swapping 0.4 AVAX to USDC on BSC:
+
+```typescript
+import {
+    EvmCrossChainOrder,
+    HashLock,
+    NetworkEnum,
+    OrderStatus,
+    PrivateKeyProviderConnector,
+    SDK,
+    EvmAddress,
+    NativeOrdersFactory,
+    Address
+} from '@1inch/cross-chain-sdk'
+import {JsonRpcProvider, Wallet} from 'ethers'
+import {randomBytes} from 'node:crypto'
+import assert from "node:assert";
+
+const PRIVATE_KEY =  '0x...'
+const WEB3_NODE_URL = 'https://...'
+const AUTH_KEY = 'auth-key'
+
+const ethersRpcProvider = new JsonRpcProvider(WEB3_NODE_URL)
+
+const ethersProviderConnector = {
+    eth: {
+        call(transactionConfig): Promise<string> {
+            return ethersRpcProvider.call(transactionConfig)
+        }
+    },
+    extend(): void {}
+}
+
+const connector = new PrivateKeyProviderConnector(
+    PRIVATE_KEY,
+    ethersProviderConnector
+)
+
+const wallet = new Wallet(PRIVATE_KEY, ethersRpcProvider)
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: AUTH_KEY,
+    blockchainProvider: connector,
+})
+
+async function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function main(): Promise<void> {
+    // estimate
+    const quote = await sdk.getQuote({
+        amount: '400000000000000000',
+        srcChainId: NetworkEnum.AVALANCHE,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true,
+        srcTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // AVAX
+        dstTokenAddress: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', // USDC
+        walletAddress: wallet.address
+    })
+
+    const preset = quote.recommendedPreset
+
+    // generate secrets
+    const secrets = Array.from({
+        length: quote.presets[preset].secretsCount
+    }).map(() => '0x' + randomBytes(32).toString('hex'))
+
+    const hashLock =
+        secrets.length === 1
+            ? HashLock.forSingleFill(secrets[0])
+            : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+    const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+
+    // create order
+    const {hash, quoteId, order} = sdk.createOrder(quote, {
+        walletAddress: wallet.address,
+        hashLock,
+        preset,
+        source: 'sdk-tutorial',
+        secretHashes
+    })
+
+    assert(order instanceof EvmCrossChainOrder)
+
+    console.log({hash}, 'order created')
+
+    // submit order
+    const orderInfo = await sdk.submitNativeOrder(
+        quote.srcChainId,
+        order,
+        EvmAddress.fromString(wallet.address),
+        quoteId,
+        secretHashes
+    )
+    console.log({hash}, 'order submitted')
+
+    const factory = NativeOrdersFactory.default(NetworkEnum.AVALANCHE)
+    const call = factory.create(new Address(wallet.address), orderInfo.order)
+
+    const txRes = await wallet.sendTransaction({
+        to: call.to.toString(),
+        data: call.data,
+        value: call.value
+    })
+
+    console.log({txHash: txRes.hash}, 'transaction broadcasted')
+
+    await wallet.provider.waitForTransaction(txRes.hash, 3)
+
+    // submit secrets for deployed escrows
+    while (true) {
+        const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+        if (secretsToShare.fills.length) {
+            for (const {idx} of secretsToShare.fills) {
+
+                // it is responsibility of the client to check whether is safe to share secret (check escrow addresses and so on)
+                await sdk.submitSecret(hash, secrets[idx])
+
+                console.log({idx}, 'shared secret')
+            }
+        }
+
+        // check if order finished
+        const {status} = await sdk.getOrderStatus(hash)
+
+        if (
+            status === OrderStatus.Executed ||
+            status === OrderStatus.Expired ||
+            status === OrderStatus.Refunded
+        ) {
+            break
+        }
+
+        await sleep(1000)
+    }
+
+    const statusResponse = await sdk.getOrderStatus(hash)
+
+    console.log(statusResponse)
+}
+
+main()
+```
+
+## Step-by-Step Breakdown
+
+<Steps>
+  <Step title="Setup Ethers Provider">
+    Configure the SDK to work with ethers.js:
+
+    ```typescript
+    import {JsonRpcProvider, Wallet} from 'ethers'
+
+    const ethersRpcProvider = new JsonRpcProvider(WEB3_NODE_URL)
+
+    const ethersProviderConnector = {
+        eth: {
+            call(transactionConfig): Promise<string> {
+                return ethersRpcProvider.call(transactionConfig)
+            }
+        },
+        extend(): void {}
+    }
+
+    const connector = new PrivateKeyProviderConnector(
+        PRIVATE_KEY,
+        ethersProviderConnector
+    )
+
+    const wallet = new Wallet(PRIVATE_KEY, ethersRpcProvider)
+    ```
+  </Step>
+
+  <Step title="Specify Native Token">
+    Use the special address for native assets:
+
+    ```typescript
+    const quote = await sdk.getQuote({
+        amount: '400000000000000000', // 0.4 AVAX in wei
+        srcChainId: NetworkEnum.AVALANCHE,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true,
+        srcTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // Native token
+        dstTokenAddress: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+        walletAddress: wallet.address
+    })
+    ```
+
+    <Tip>
+    The address `0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee` represents native assets on all EVM chains.
+    </Tip>
+  </Step>
+
+  <Step title="Submit Native Order">
+    Use `submitNativeOrder` instead of `submitOrder`:
+
+    ```typescript
+    const orderInfo = await sdk.submitNativeOrder(
+        quote.srcChainId,
+        order,
+        EvmAddress.fromString(wallet.address),
+        quoteId,
+        secretHashes
+    )
+    ```
+
+    This creates a special signature for native asset orders.
+  </Step>
+
+  <Step title="Publish Order On-Chain">
+    Create and send the on-chain transaction:
+
+    ```typescript
+    const factory = NativeOrdersFactory.default(NetworkEnum.AVALANCHE)
+    const call = factory.create(
+      new Address(wallet.address),
+      orderInfo.order
+    )
+
+    const txRes = await wallet.sendTransaction({
+        to: call.to.toString(),
+        data: call.data,
+        value: call.value // Native token amount
+    })
+
+    console.log({txHash: txRes.hash}, 'transaction broadcasted')
+
+    await wallet.provider.waitForTransaction(txRes.hash, 3)
+    ```
+
+    <Warning>
+    The transaction must include the `value` field with the native token amount.
+    </Warning>
+  </Step>
+
+  <Step title="Wait for Confirmation">
+    Wait for transaction confirmation before proceeding:
+
+    ```typescript
+    await wallet.provider.waitForTransaction(txRes.hash, 3)
+    ```
+
+    <Tip>
+    Wait for at least 3 confirmations to ensure the transaction is finalized.
+    </Tip>
+  </Step>
+
+  <Step title="Monitor and Submit Secrets">
+    After confirmation, monitor and submit secrets as usual:
+
+    ```typescript
+    while (true) {
+        const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+        if (secretsToShare.fills.length) {
+            for (const {idx} of secretsToShare.fills) {
+                await sdk.submitSecret(hash, secrets[idx])
+                console.log({idx}, 'shared secret')
+            }
+        }
+
+        const {status} = await sdk.getOrderStatus(hash)
+
+        if (
+            status === OrderStatus.Executed ||
+            status === OrderStatus.Expired ||
+            status === OrderStatus.Refunded
+        ) {
+            break
+        }
+
+        await sleep(1000)
+    }
+    ```
+  </Step>
+</Steps>
+
+## Native Token Addresses
+
+For all EVM chains, use the same address to represent native tokens:
+
+```typescript
+const NATIVE_TOKEN = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+
+// Examples:
+// Ethereum -> srcTokenAddress: NATIVE_TOKEN (ETH)
+// BSC -> srcTokenAddress: NATIVE_TOKEN (BNB)
+// Polygon -> srcTokenAddress: NATIVE_TOKEN (MATIC)
+// Avalanche -> srcTokenAddress: NATIVE_TOKEN (AVAX)
+// Arbitrum -> srcTokenAddress: NATIVE_TOKEN (ETH)
+```
+
+## Amount Formatting
+
+Native tokens use 18 decimals on most chains:
+
+```typescript
+// 0.4 AVAX
+const amount = '400000000000000000' // 0.4 * 10^18
+
+// 1 ETH
+const amount = '1000000000000000000' // 1 * 10^18
+
+// 0.01 BNB
+const amount = '10000000000000000' // 0.01 * 10^18
+```
+
+## Key Differences from ERC20 Orders
+
+| Aspect | ERC20 Orders | Native Asset Orders |
+|--------|--------------|---------------------|
+| Token Address | Actual token address | `0xeeee...eeee` |
+| Submission | `submitOrder()` | `submitNativeOrder()` |
+| Allowance | Required | Not required |
+| On-chain TX | Not required | **Required** via `NativeOrdersFactory` |
+| TX Value | 0 | Token amount |
+
+## NativeOrdersFactory
+
+The factory creates the transaction data for publishing native orders:
+
+```typescript
+// Get factory for specific chain
+const factory = NativeOrdersFactory.default(NetworkEnum.AVALANCHE)
+
+// Create transaction call data
+const call = factory.create(
+  new Address(wallet.address),
+  orderInfo.order
+)
+
+// call contains:
+// - call.to: Contract address
+// - call.data: Transaction data
+// - call.value: Native token amount
+```
+
+## Security Considerations
+
+<Warning>
+**Important checks before sending native asset orders:**
+
+1. Verify you have sufficient native token balance
+2. Ensure gas reserve for the transaction
+3. Wait for full transaction confirmation
+4. Validate escrow addresses before secret submission
+5. Monitor transaction status on block explorer
+</Warning>
+
+## Gas Estimation
+
+Ensure you have extra native tokens for gas:
+
+```typescript
+const balance = await wallet.provider.getBalance(wallet.address)
+const amountWithGasBuffer = BigInt(amount) + BigInt('50000000000000000') // + 0.05 for gas
+
+if (balance < amountWithGasBuffer) {
+  throw new Error('Insufficient balance including gas reserve')
+}
+```
+
+## Troubleshooting
+
+### Insufficient Funds
+
+- Ensure balance covers both swap amount AND gas fees
+- Reserve extra native tokens for gas
+
+### Transaction Fails
+
+- Verify `call.value` matches the order amount
+- Check gas limit is sufficient
+- Confirm network is not congested
+
+### Order Not Executing
+
+- Ensure on-chain transaction confirmed
+- Verify order was submitted to relayer first
+- Check transaction succeeded on block explorer
+
+### Secret Submission Issues
+
+- Wait for full transaction confirmation (3+ blocks)
+- Verify order hash matches
+- Check order hasn't expired
+
+## Solana Native Assets
+
+For Solana native SOL, use:
+
+```typescript
+import { SolanaAddress } from '@1inch/cross-chain-sdk'
+
+const srcTokenAddress = SolanaAddress.NATIVE
+```
+
+See the [Solana to EVM guide](/guides/solana-to-evm) for complete details.
+
+## Next Steps
+
+- Learn about [EVM to EVM swaps](/guides/evm-to-evm) for ERC20 tokens
+- Explore [Order Management](/guides/order-management) for monitoring
+- See [WebSocket API](/guides/websocket-api) for real-time updates

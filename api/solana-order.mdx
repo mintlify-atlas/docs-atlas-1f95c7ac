@@ -1,0 +1,638 @@
+---
+title: 'SvmCrossChainOrder'
+description: 'Solana cross-chain order class for Solana Virtual Machine'
+---
+
+## Overview
+
+The `SvmCrossChainOrder` class represents a cross-chain swap order originating from Solana. It extends `BaseOrder` and encapsulates all order parameters, escrow details, and auction mechanics specific to Solana.
+
+## Class Definition
+
+```typescript
+class SvmCrossChainOrder extends BaseOrder<SolanaAddress, SolanaOrderJSON>
+```
+
+## Constructor
+
+```typescript
+new SvmCrossChainOrder(
+  orderInfo: OrderInfoData,
+  escrowParams: SolanaEscrowParams,
+  details: SolanaDetails,
+  extra: SolanaExtra
+)
+```
+
+<Warning>
+  The constructor is private. Use static factory methods `new()`, `fromContractOrder()`, or `fromJSON()` to create instances.
+</Warning>
+
+## Static Factory Methods
+
+### new()
+
+Create a new Solana cross-chain order.
+
+```typescript
+SvmCrossChainOrder.new(
+  orderInfo: OrderInfoData,
+  escrowParams: SolanaEscrowParams,
+  details: SolanaDetails,
+  extra: Omit<SolanaExtra, 'srcAssetIsNative'>
+): SvmCrossChainOrder
+```
+
+<ParamField path="orderInfo" type="OrderInfoData" required>
+  Core order information
+  
+  <Expandable title="properties">
+    <ParamField path="srcToken" type="SolanaAddress" required>
+      Source token mint address (use `SolanaAddress.NATIVE` for SOL)
+    </ParamField>
+    
+    <ParamField path="dstToken" type="EvmAddress" required>
+      Destination chain token address
+    </ParamField>
+    
+    <ParamField path="maker" type="SolanaAddress" required>
+      Maker's Solana address
+    </ParamField>
+    
+    <ParamField path="srcAmount" type="bigint" required>
+      Source amount (u64)
+    </ParamField>
+    
+    <ParamField path="minDstAmount" type="bigint" required>
+      Minimum destination amount (u256)
+    </ParamField>
+    
+    <ParamField path="receiver" type="EvmAddress" required>
+      Receiver address on destination chain
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="escrowParams" type="SolanaEscrowParams" required>
+  Escrow and security parameters
+  
+  <Expandable title="properties">
+    <ParamField path="hashLock" type="HashLock" required>
+      Hash lock for atomic swap
+    </ParamField>
+    
+    <ParamField path="srcChainId" type="NetworkEnum.SOLANA" required>
+      Must be `NetworkEnum.SOLANA`
+    </ParamField>
+    
+    <ParamField path="dstChainId" type="SupportedChain" required>
+      Destination chain ID (EVM chain)
+    </ParamField>
+    
+    <ParamField path="srcSafetyDeposit" type="bigint" required>
+      Safety deposit on Solana (u64)
+    </ParamField>
+    
+    <ParamField path="dstSafetyDeposit" type="bigint" required>
+      Safety deposit on destination chain (u64)
+    </ParamField>
+    
+    <ParamField path="timeLocks" type="TimeLocks" required>
+      Time lock configuration
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="details" type="SolanaDetails" required>
+  Auction configuration
+  
+  <Expandable title="properties">
+    <ParamField path="auction" type="AuctionDetails" required>
+      Dutch auction parameters
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="extra" type="Omit<SolanaExtra, 'srcAssetIsNative'>">
+  Additional order options (srcAssetIsNative is auto-detected)
+  
+  <Expandable title="properties">
+    <ParamField path="orderExpirationDelay" type="bigint">
+      Seconds after auction ends before order expires (default: 12s)
+    </ParamField>
+    
+    <ParamField path="resolverCancellationConfig" type="ResolverCancellationConfig">
+      Resolver cancellation settings (default: ALMOST_ZERO to enable cancellation)
+    </ParamField>
+    
+    <ParamField path="source" type="string">
+      Integration source identifier (default: 'sdk')
+    </ParamField>
+    
+    <ParamField path="allowMultipleFills" type="boolean">
+      Allow multiple fills (default: true)
+    </ParamField>
+    
+    <ParamField path="salt" type="bigint">
+      Random salt in range [0, UINT_32_MAX]
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Example
+
+```typescript
+import { 
+  SvmCrossChainOrder, 
+  SolanaAddress, 
+  EvmAddress,
+  HashLock,
+  TimeLocks,
+  AuctionDetails,
+  NetworkEnum
+} from '@1inch/cross-chain-sdk'
+
+const order = SvmCrossChainOrder.new(
+  {
+    srcToken: SolanaAddress.NATIVE, // SOL
+    dstToken: EvmAddress.fromString('0x...'), // USDC on Ethereum
+    maker: SolanaAddress.fromString('maker...'),
+    srcAmount: 1000000000n, // 1 SOL (9 decimals)
+    minDstAmount: 150000000n, // 150 USDC (6 decimals)
+    receiver: EvmAddress.fromString('0x...')
+  },
+  {
+    hashLock: HashLock.forSingleFill(secret),
+    srcChainId: NetworkEnum.SOLANA,
+    dstChainId: 1, // Ethereum
+    srcSafetyDeposit: 1000000n,
+    dstSafetyDeposit: 1000000n,
+    timeLocks: TimeLocks.new(...)
+  },
+  {
+    auction: AuctionDetails.new(...)
+  },
+  {
+    allowMultipleFills: false
+  }
+)
+```
+
+### fromContractOrder()
+
+Create an order from on-chain instruction data.
+
+```typescript
+SvmCrossChainOrder.fromContractOrder(
+  data: ParsedCreateInstructionData,
+  auction: AuctionDetails
+): SvmCrossChainOrder
+```
+
+<ParamField path="data" type="ParsedCreateInstructionData" required>
+  Parsed create instruction from Solana escrow program
+</ParamField>
+
+<ParamField path="auction" type="AuctionDetails" required>
+  Auction details matching the order's auction hash
+</ParamField>
+
+<ResponseField name="returns" type="SvmCrossChainOrder">
+  Reconstructed order instance
+</ResponseField>
+
+### fromJSON()
+
+Deserialize an order from JSON.
+
+```typescript
+SvmCrossChainOrder.fromJSON(data: SolanaOrderJSON): SvmCrossChainOrder
+```
+
+<ParamField path="data" type="SolanaOrderJSON" required>
+  Serialized order data
+</ParamField>
+
+<ResponseField name="returns" type="SvmCrossChainOrder">
+  Order instance
+</ResponseField>
+
+## Properties
+
+### Core Order Data
+
+<ResponseField name="maker" type="SolanaAddress">
+  Maker's Solana address
+</ResponseField>
+
+<ResponseField name="makerAsset" type="SolanaAddress">
+  Source token mint address (WSOL for native SOL)
+</ResponseField>
+
+<ResponseField name="takerAsset" type="EvmAddress">
+  Destination token address
+</ResponseField>
+
+<ResponseField name="makingAmount" type="bigint">
+  Source amount (u64)
+</ResponseField>
+
+<ResponseField name="takingAmount" type="bigint">
+  Minimum destination amount (u256)
+</ResponseField>
+
+<ResponseField name="receiver" type="EvmAddress">
+  Receiver on destination chain
+</ResponseField>
+
+<ResponseField name="salt" type="bigint">
+  Order salt (u64, includes source tracking)
+</ResponseField>
+
+<ResponseField name="source" type="string">
+  Integration source identifier
+</ResponseField>
+
+### Time Parameters
+
+<ResponseField name="deadline" type="bigint">
+  Order expiration timestamp in seconds
+</ResponseField>
+
+<ResponseField name="auctionStartTime" type="bigint">
+  Auction start timestamp in seconds
+</ResponseField>
+
+<ResponseField name="auctionEndTime" type="bigint">
+  Auction end timestamp in seconds
+</ResponseField>
+
+### Security Parameters
+
+<ResponseField name="hashLock" type="HashLock">
+  Hash lock for atomic swap
+</ResponseField>
+
+<ResponseField name="timeLocks" type="TimeLocks">
+  Time lock configuration
+</ResponseField>
+
+<ResponseField name="srcSafetyDeposit" type="bigint">
+  Safety deposit on Solana
+</ResponseField>
+
+<ResponseField name="dstSafetyDeposit" type="bigint">
+  Safety deposit on destination chain
+</ResponseField>
+
+<ResponseField name="resolverCancellationConfig" type="ResolverCancellationConfig">
+  Resolver cancellation configuration
+</ResponseField>
+
+### Chain Information
+
+<ResponseField name="dstChainId" type="SupportedChain">
+  Destination chain ID
+</ResponseField>
+
+<ResponseField name="srcAssetIsNative" type="boolean">
+  Whether source asset is native SOL
+</ResponseField>
+
+### Auction
+
+<ResponseField name="auction" type="AuctionDetails">
+  Dutch auction configuration
+</ResponseField>
+
+### Fill Configuration
+
+<ResponseField name="partialFillAllowed" type="boolean">
+  Whether partial fills are allowed (same as `multipleFillsAllowed`)
+</ResponseField>
+
+<ResponseField name="multipleFillsAllowed" type="boolean">
+  Whether multiple fills are allowed
+</ResponseField>
+
+## Methods
+
+### getOrderHash()
+
+Get the order hash in base58 encoding.
+
+```typescript
+getOrderHash(srcChainId: number): string
+```
+
+<ParamField path="srcChainId" type="number" required>
+  Source chain ID (ignored for Solana orders)
+</ParamField>
+
+<ResponseField name="returns" type="string">
+  Order hash in base58 encoding
+</ResponseField>
+
+### getOrderHashBuffer()
+
+Get the order hash as a Buffer.
+
+```typescript
+getOrderHashBuffer(): Buffer
+```
+
+<ResponseField name="returns" type="Buffer">
+  Order hash buffer (keccak256 of order parameters)
+</ResponseField>
+
+### getOrderAccount()
+
+Get the order's PDA (Program Derived Address).
+
+```typescript
+getOrderAccount(programId: SolanaAddress): SolanaAddress
+```
+
+<ParamField path="programId" type="SolanaAddress" required>
+  Escrow factory program ID
+</ParamField>
+
+<ResponseField name="returns" type="SolanaAddress">
+  Order account PDA
+</ResponseField>
+
+### getSrcEscrowAddress()
+
+Get the escrow address for a specific fill.
+
+```typescript
+getSrcEscrowAddress(
+  programId: SolanaAddress,
+  taker: SolanaAddress,
+  hashLock?: HashLock,
+  fillAmount?: bigint
+): SolanaAddress
+```
+
+<ParamField path="programId" type="SolanaAddress" required>
+  Escrow factory program ID
+</ParamField>
+
+<ParamField path="taker" type="SolanaAddress" required>
+  Address that filled the order
+</ParamField>
+
+<ParamField path="hashLock" type="HashLock">
+  Hash lock for this fill (defaults to order's hash lock)
+</ParamField>
+
+<ParamField path="fillAmount" type="bigint">
+  Fill amount (defaults to full order amount)
+</ParamField>
+
+<ResponseField name="returns" type="SolanaAddress">
+  Escrow PDA (owner of the escrow ATA)
+</ResponseField>
+
+### getSrcEscrowATA()
+
+Get the Associated Token Account where funds are stored after fill.
+
+```typescript
+getSrcEscrowATA(params: {
+  programId: SolanaAddress
+  taker: SolanaAddress
+  fillAmount?: bigint
+  hashLock?: HashLock
+  tokenProgramId: SolanaAddress
+}): SolanaAddress
+```
+
+<ParamField path="params.programId" type="SolanaAddress" required>
+  Escrow factory program ID
+</ParamField>
+
+<ParamField path="params.taker" type="SolanaAddress" required>
+  Address that filled the order
+</ParamField>
+
+<ParamField path="params.fillAmount" type="bigint">
+  Fill amount
+</ParamField>
+
+<ParamField path="params.hashLock" type="HashLock">
+  Hash lock for this fill
+</ParamField>
+
+<ParamField path="params.tokenProgramId" type="SolanaAddress" required>
+  Token Program or Token-2022 Program ID
+</ParamField>
+
+<ResponseField name="returns" type="SolanaAddress">
+  ATA where tokens are held
+</ResponseField>
+
+### getCalculator()
+
+Get the auction calculator for this order.
+
+```typescript
+getCalculator(): AuctionCalculator
+```
+
+<ResponseField name="returns" type="AuctionCalculator">
+  Calculator for auction rate calculations
+</ResponseField>
+
+### toJSON()
+
+Serialize order to JSON.
+
+```typescript
+toJSON(): SolanaOrderJSON
+```
+
+<ResponseField name="returns" type="SolanaOrderJSON">
+  Serialized order data
+  
+  <Expandable title="structure">
+    ```typescript
+    {
+      orderInfo: {
+        srcToken: string        // base58 Solana address
+        dstToken: string        // hex EVM address
+        maker: string           // base58 Solana address
+        srcAmount: string       // u64 bigint string
+        minDstAmount: string    // u256 bigint string
+        receiver: string        // hex EVM address
+      }
+      escrowParams: {
+        hashLock: string        // 32-byte hex
+        srcChainId: NetworkEnum.SOLANA
+        dstChainId: number
+        srcSafetyDeposit: string  // u64 bigint string
+        dstSafetyDeposit: string  // u64 bigint string
+        timeLocks: string         // u256 bigint string
+      }
+      details: {
+        auction: {
+          startTime: string
+          duration: string
+          initialRateBump: number
+          points: AuctionPoint[]
+        }
+      }
+      extra: {
+        srcAssetIsNative: boolean
+        orderExpirationDelay: string  // bigint string
+        resolverCancellationConfig: {
+          maxCancellationPremium: string  // u64 bigint string
+          cancellationAuctionDuration: number
+        }
+        source?: string
+        allowMultipleFills: boolean
+        salt: string  // u32 bigint string
+      }
+    }
+    ```
+  </Expandable>
+</ResponseField>
+
+### getOrderHashBuffer() (static)
+
+Compute order hash from parameters.
+
+```typescript
+static getOrderHashBuffer(params: OrderHashParams): Buffer
+```
+
+<ParamField path="params" type="OrderHashParams" required>
+  Order parameters for hashing
+  
+  Includes all order fields plus either `auction: AuctionDetails` or `auctionHash: Buffer`
+</ParamField>
+
+<ResponseField name="returns" type="Buffer">
+  Keccak256 hash of concatenated order parameters
+</ResponseField>
+
+## Resolver Cancellation Config
+
+The `ResolverCancellationConfig` controls whether and how resolvers can cancel orders.
+
+```typescript
+class ResolverCancellationConfig {
+  constructor(
+    public readonly maxCancellationPremium: bigint,  // u64
+    public readonly cancellationAuctionDuration: number
+  )
+}
+```
+
+### Predefined Configs
+
+<ResponseField name="ResolverCancellationConfig.ZERO" type="ResolverCancellationConfig">
+  Disables resolver cancellation (both values are 0)
+</ResponseField>
+
+<ResponseField name="ResolverCancellationConfig.ALMOST_ZERO" type="ResolverCancellationConfig">
+  Enables resolver cancellation with minimal premium (values are 1)
+</ResponseField>
+
+### Methods
+
+<ResponseField name="disableResolverCancellation()" type="static">
+  Returns `ResolverCancellationConfig.ZERO`
+</ResponseField>
+
+<ResponseField name="isZero()" type="boolean">
+  Returns `true` if cancellation is disabled
+</ResponseField>
+
+<ResponseField name="toJSON()" type="object">
+  Serializes to `{ maxCancellationPremium: string, cancellationAuctionDuration: number }`
+</ResponseField>
+
+## Example: Complete Order Flow
+
+```typescript
+import { 
+  SvmCrossChainOrder,
+  SolanaAddress,
+  EvmAddress,
+  HashLock,
+  TimeLocks,
+  AuctionDetails,
+  NetworkEnum
+} from '@1inch/cross-chain-sdk'
+
+// 1. Create order
+const secret = crypto.randomBytes(32)
+const hashLock = HashLock.forSingleFill(secret)
+
+const order = SvmCrossChainOrder.new(
+  {
+    srcToken: SolanaAddress.fromString('So11111111111111111111111111111111111111112'), // Wrapped SOL
+    dstToken: EvmAddress.fromString('0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'), // USDC on Ethereum
+    maker: makerAddress,
+    srcAmount: 2_000_000_000n, // 2 SOL
+    minDstAmount: 300_000_000n, // 300 USDC
+    receiver: receiverAddress
+  },
+  {
+    hashLock,
+    srcChainId: NetworkEnum.SOLANA,
+    dstChainId: 1,
+    srcSafetyDeposit: 10_000_000n,
+    dstSafetyDeposit: 1_000_000n,
+    timeLocks: TimeLocks.new(
+      3600n,  // publicDeadline: 1 hour
+      7200n,  // forcedExit: 2 hours  
+      10800n, // safetyDeposit: 3 hours
+      14400n  // cancellation: 4 hours
+    )
+  },
+  {
+    auction: AuctionDetails.new({
+      startTime: BigInt(Math.floor(Date.now() / 1000)),
+      duration: 180n, // 3 minutes
+      initialRateBump: 100000, // 10%
+      points: [
+        { delay: 60, coefficient: 50000 },
+        { delay: 120, coefficient: 25000 },
+        { delay: 180, coefficient: 0 }
+      ]
+    })
+  },
+  {}
+)
+
+// 2. Get order hash
+const orderHash = order.getOrderHash(NetworkEnum.SOLANA)
+console.log('Order hash:', orderHash)
+
+// 3. Get order account (PDA)
+const orderAccount = order.getOrderAccount(escrowProgramId)
+
+// 4. Submit order to API and on-chain
+const orderJSON = order.toJSON()
+await sdk.submitOrder(orderJSON, signature)
+
+// 5. After fill, get escrow addresses
+const escrowAddress = order.getSrcEscrowAddress(
+  escrowProgramId,
+  takerAddress
+)
+
+const escrowATA = order.getSrcEscrowATA({
+  programId: escrowProgramId,
+  taker: takerAddress,
+  tokenProgramId: TOKEN_PROGRAM_ID
+})
+```
+
+## Related Types
+
+- [EvmCrossChainOrder](/api/evm-order) - EVM cross-chain orders
+- [OrderStatus](/api/order-status) - Order status and lifecycle
+- [HashLock](/api/hash-lock) - Hash lock implementation

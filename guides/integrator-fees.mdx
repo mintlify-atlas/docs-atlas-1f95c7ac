@@ -1,0 +1,368 @@
+---
+title: 'Integrator Fees'
+description: 'How to charge fees for your 1inch integration'
+---
+
+## Overview
+
+As an integrator, you can charge fees on swaps processed through your application. Fees are specified in basis points and deducted from the destination token amount.
+
+## How It Works
+
+Integrator fees are:
+
+- Specified in basis points (1% = 100 bps)
+- Deducted from the destination token amount
+- Sent directly to your specified receiver address
+- Applied automatically by the protocol
+
+<Tip>
+Integrator fees provide a sustainable revenue model for applications built on 1inch.
+</Tip>
+
+## Implementation
+
+Add the `integratorFee` field when requesting a quote:
+
+```typescript
+import { SDK, NetworkEnum, Bps } from '@1inch/cross-chain-sdk'
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: 'your-auth-key',
+    blockchainProvider: connector
+})
+
+const integratorFeeReceiver = '0xYourFeeReceiverAddress'
+
+const quote = await sdk.getQuote({
+    amount: '10000000',
+    srcChainId: NetworkEnum.POLYGON,
+    dstChainId: NetworkEnum.BINANCE,
+    enableEstimate: true,
+    srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f', // USDT
+    dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // BNB
+    walletAddress,
+    integratorFee: {
+        receiver: integratorFeeReceiver, // address to receive the fee
+        value: new Bps(100n) // 1% fee (100 basis points)
+    }
+})
+```
+
+## Complete Example
+
+Here's a full example with integrator fees:
+
+```typescript
+import {
+    HashLock,
+    NetworkEnum,
+    OrderStatus,
+    PresetEnum,
+    PrivateKeyProviderConnector,
+    SDK,
+    Bps
+} from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+import {randomBytes} from 'node:crypto'
+
+const privateKey = '0x...'
+const rpc = 'https://ethereum-rpc.publicnode.com'
+const authKey = 'auth-key'
+const source = 'my-dapp'
+
+const web3 = new Web3(rpc)
+const walletAddress = web3.eth.accounts.privateKeyToAccount(privateKey).address
+
+const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey,
+    blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+})
+
+const integratorFeeReceiver = '0xYourFeeReceiverAddress'
+
+async function main(): Promise<void> {
+    // Get quote with 1% integrator fee
+    const quote = await sdk.getQuote({
+        amount: '10000000',
+        srcChainId: NetworkEnum.POLYGON,
+        dstChainId: NetworkEnum.BINANCE,
+        enableEstimate: true,
+        srcTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+        dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        walletAddress,
+        integratorFee: {
+            receiver: integratorFeeReceiver,
+            value: new Bps(100n) // 1% fee
+        }
+    })
+
+    console.log('Expected destination amount (after fee):', quote.dstTokenAmount)
+    console.log('Integrator fee receiver:', integratorFeeReceiver)
+
+    const preset = PresetEnum.fast
+
+    const secrets = Array.from({
+        length: quote.presets[preset].secretsCount
+    }).map(() => '0x' + randomBytes(32).toString('hex'))
+
+    const hashLock =
+        secrets.length === 1
+            ? HashLock.forSingleFill(secrets[0])
+            : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+    const secretHashes = secrets.map((s) => HashLock.hashSecret(s))
+
+    const {hash, quoteId, order} = await sdk.createOrder(quote, {
+        walletAddress,
+        hashLock,
+        preset,
+        source,
+        secretHashes
+    })
+
+    await sdk.submitOrder(
+        quote.srcChainId,
+        order,
+        quoteId,
+        secretHashes
+    )
+
+    console.log('Order created with integrator fee:', hash)
+
+    // ... continue with secret submission and monitoring
+}
+
+main()
+```
+
+## Basis Points Explained
+
+Basis points (bps) are a unit of measurement for percentages:
+
+| Basis Points | Percentage | Decimal |
+|--------------|------------|----------|
+| 1 bps | 0.01% | 0.0001 |
+| 10 bps | 0.1% | 0.001 |
+| 50 bps | 0.5% | 0.005 |
+| 100 bps | 1% | 0.01 |
+| 250 bps | 2.5% | 0.025 |
+| 500 bps | 5% | 0.05 |
+
+## Fee Calculation
+
+The integrator fee is deducted from the destination token amount:
+
+```typescript
+// Example: 10 USDT swap with 1% fee
+const srcAmount = 10_000_000n // 10 USDT
+const estimatedDstAmount = 5_000_000_000_000_000n // ~0.005 BNB
+
+const feeBps = 100n // 1%
+const feeAmount = (estimatedDstAmount * feeBps) / 10_000n
+const userReceives = estimatedDstAmount - feeAmount
+
+console.log('Fee amount:', feeAmount)
+console.log('User receives:', userReceives)
+```
+
+## Fee Ranges
+
+<Warning>
+While the protocol doesn't enforce fee limits, consider user experience when setting fees:
+
+- **Competitive**: 0.1% - 0.5% (10-50 bps)
+- **Standard**: 0.5% - 1% (50-100 bps)  
+- **Premium**: 1% - 2% (100-200 bps)
+- **High**: 2%+ (200+ bps)
+
+Higher fees may discourage users from using your platform.
+</Warning>
+
+## Fee Receiver Address
+
+The fee receiver can be:
+
+- Your application's treasury wallet
+- A multisig wallet
+- A smart contract (for automatic distribution)
+
+```typescript
+const integratorFee = {
+    receiver: '0xYourTreasuryWallet', // Must be a valid address
+    value: new Bps(100n)
+}
+```
+
+<Tip>
+Use a dedicated address for fee collection to simplify accounting and analytics.
+</Tip>
+
+## Quote Response
+
+The quote response reflects the fee:
+
+```typescript
+const quote = await sdk.getQuote({
+    // ... params with integratorFee
+})
+
+console.log(quote.dstTokenAmount) // Amount user receives (after fee)
+console.log(quote.integratorFee)   // Your fee configuration
+```
+
+The `dstTokenAmount` already accounts for the integrator fee.
+
+## Dynamic Fees
+
+You can adjust fees based on various factors:
+
+```typescript
+function calculateFee(amount: bigint, userTier: string): Bps {
+    if (userTier === 'premium') {
+        return new Bps(25n) // 0.25% for premium users
+    } else if (amount > 100_000_000n) {
+        return new Bps(50n) // 0.5% for large swaps
+    } else {
+        return new Bps(100n) // 1% standard fee
+    }
+}
+
+const fee = calculateFee(amount, userTier)
+
+const quote = await sdk.getQuote({
+    amount,
+    srcChainId,
+    dstChainId,
+    srcTokenAddress,
+    dstTokenAddress,
+    walletAddress,
+    integratorFee: {
+        receiver: integratorFeeReceiver,
+        value: fee
+    }
+})
+```
+
+## Multi-Chain Considerations
+
+Fees are paid in the destination token:
+
+```typescript
+// ETH -> BSC swap
+const quote = await sdk.getQuote({
+    srcChainId: NetworkEnum.ETHEREUM,
+    dstChainId: NetworkEnum.BINANCE,
+    srcTokenAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7', // USDT on ETH
+    dstTokenAddress: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', // BNB
+    integratorFee: {
+        receiver: '0xYourBscAddress', // Receive BNB fees on BSC
+        value: new Bps(100n)
+    }
+})
+```
+
+<Tip>
+Ensure your fee receiver address is valid on the **destination chain**.
+</Tip>
+
+## Fee Analytics
+
+Track your fees by monitoring the fee receiver address:
+
+```typescript
+import { ethers } from 'ethers'
+
+const provider = new ethers.JsonRpcProvider(rpcUrl)
+
+// Check BNB balance (native token)
+const bnbBalance = await provider.getBalance(integratorFeeReceiver)
+
+// Check token balance (ERC20)
+const tokenContract = new ethers.Contract(
+    tokenAddress,
+    ['function balanceOf(address) view returns (uint256)'],
+    provider
+)
+const tokenBalance = await tokenContract.balanceOf(integratorFeeReceiver)
+
+console.log('Collected fees:', ethers.formatEther(balance))
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Be Transparent">
+    Display fees clearly to users before they confirm swaps:
+
+    ```typescript
+    const feePercentage = (100n * 100n) / 10000n // 1%
+    console.log(`A ${feePercentage}% fee will be charged`)
+    console.log(`You will receive: ${quote.dstTokenAmount}`)
+    ```
+  </Step>
+
+  <Step title="Use Reasonable Fees">
+    Keep fees competitive to maintain user trust and volume.
+  </Step>
+
+  <Step title="Secure Fee Receiver">
+    Use a secure wallet or multisig for the fee receiver address.
+  </Step>
+
+  <Step title="Monitor Collections">
+    Set up alerts for fee collection and regularly withdraw to secure storage.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Fee Not Applied
+
+- Verify `integratorFee` is passed in `getQuote()`
+- Check receiver address is valid
+- Ensure `Bps` value is correctly formatted
+
+### Incorrect Fee Amount
+
+- Confirm basis points calculation (100 bps = 1%)
+- Verify you're using `new Bps(value)` correctly
+- Check quote response for actual amounts
+
+### Fee Not Received
+
+- Verify receiver address on destination chain
+- Check order was executed successfully
+- Monitor destination chain explorer for transfers
+
+## Example Fee Tiers
+
+```typescript
+enum FeeTier {
+    FREE = 0,      // 0% - promotional
+    BASIC = 50,    // 0.5% - standard users
+    PREMIUM = 25,  // 0.25% - premium users
+    VIP = 10       // 0.1% - VIP users
+}
+
+function getUserFee(userId: string): Bps {
+    const tier = getUserTier(userId)
+    return new Bps(BigInt(tier))
+}
+
+const quote = await sdk.getQuote({
+    // ... other params
+    integratorFee: {
+        receiver: integratorFeeReceiver,
+        value: getUserFee(userId)
+    }
+})
+```
+
+## Next Steps
+
+- Explore [WebSocket API](/guides/websocket-api) to monitor fee collection in real-time
+- Learn about [Order Management](/guides/order-management) to track order execution
+- See [EVM to EVM Swaps](/guides/evm-to-evm) for complete integration examples

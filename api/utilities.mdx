@@ -1,0 +1,345 @@
+---
+title: 'Utility Functions'
+description: 'Helper functions and utilities for working with the SDK'
+icon: 'wrench'
+---
+
+## Overview
+
+The SDK provides a comprehensive set of utility functions for common operations like address manipulation, number conversions, time handling, and validation.
+
+## Number Utilities
+
+### bigintToBN
+
+Convert a JavaScript `bigint` to a BN (Big Number) instance.
+
+```typescript
+import { utils } from '@1inch/cross-chain-sdk'
+
+function bigintToBN(value: bigint): BN
+```
+
+**Example:**
+```typescript
+const bn = utils.bigintToBN(1000000000000000000n)
+```
+
+### bnArrayToBigInt
+
+Convert an array of 4 BN instances to a single `bigint`.
+
+```typescript
+function bnArrayToBigInt(arr: FixedLengthArray<BN, 4>): bigint
+```
+
+**Example:**
+```typescript
+const arr = [bn1, bn2, bn3, bn4]
+const value = utils.bnArrayToBigInt(arr)
+```
+
+### uint256split
+
+Split a uint256 value into four u64 integers in little-endian format.
+
+```typescript
+function uint256split(value: bigint): [bigint, bigint, bigint, bigint]
+```
+
+**Example:**
+```typescript
+const [limb0, limb1, limb2, limb3] = utils.uint256split(value)
+```
+
+### uint256BorchSerialized
+
+Serialize a uint256 value to a 32-byte Buffer using Borsh serialization.
+
+```typescript
+function uint256BorchSerialized(val: bigint): Buffer
+```
+
+**Example:**
+```typescript
+const buffer = utils.uint256BorchSerialized(1000000000000000000n)
+```
+
+### uintAsBeBytes
+
+Convert a uint (32, 64, or 24-bit) to big-endian bytes.
+
+```typescript
+function uintAsBeBytes(value: bigint, size: 64 | 32 | 24): Buffer
+```
+
+**Example:**
+```typescript
+const bytes = utils.uintAsBeBytes(12345n, 64)
+```
+
+### isBigintString
+
+Check if a string represents a valid bigint (only digits).
+
+```typescript
+function isBigintString(value: string): boolean
+```
+
+**Example:**
+```typescript
+if (utils.isBigintString('1234567890')) {
+  const amount = BigInt('1234567890')
+}
+```
+
+### u24ToNumber
+
+Convert a 3-byte array to a number.
+
+```typescript
+function u24ToNumber(val: [FixedLengthArray<number, 3>]): number
+```
+
+## Math Utilities
+
+### mulDiv
+
+Perform multiplication and division with optional rounding.
+
+```typescript
+enum Rounding {
+  Ceil,
+  Floor
+}
+
+function mulDiv(
+  a: bigint,
+  b: bigint,
+  x: bigint,
+  rounding: Rounding = Rounding.Floor
+): bigint
+```
+
+**Example:**
+```typescript
+import { utils, Rounding } from '@1inch/cross-chain-sdk'
+
+// Calculate (a * b) / x with floor rounding
+const result = utils.mulDiv(100n, 200n, 50n)
+
+// Calculate with ceiling rounding
+const resultCeil = utils.mulDiv(100n, 200n, 50n, Rounding.Ceil)
+```
+
+## Time Utilities
+
+### now
+
+Get the current UNIX timestamp in seconds.
+
+```typescript
+function now(): number
+```
+
+**Example:**
+```typescript
+import { utils } from '@1inch/cross-chain-sdk'
+
+const currentTime = utils.now()
+console.log(currentTime) // 1709481234
+```
+
+## Validation Utilities
+
+### assertUInteger
+
+Validate that a value is an unsigned integer within the specified range.
+
+```typescript
+function assertUInteger(val: number | bigint, max = UINT_32_MAX): void
+```
+
+**Example:**
+```typescript
+import { utils } from '@1inch/cross-chain-sdk'
+
+try {
+  utils.assertUInteger(42)
+  utils.assertUInteger(-1) // Throws error
+} catch (error) {
+  console.error(error.message)
+}
+```
+
+**Throws:**
+- Error if value is not an integer
+- Error if value is negative
+- Error if value exceeds the maximum
+
+## Bytes Utilities
+
+### bufferFromHex
+
+Convert a hex string to a Buffer with optional padding.
+
+```typescript
+function bufferFromHex(hex: string, bytesSize: number = -1): Buffer
+```
+
+**Parameters:**
+- `hex`: Hex string (must start with '0x')
+- `bytesSize`: Target size in bytes (-1 for no padding)
+
+**Example:**
+```typescript
+import { utils } from '@1inch/cross-chain-sdk'
+
+const buffer = utils.bufferFromHex('0x1234', 32)
+console.log(buffer.length) // 32 (padded with zeros)
+```
+
+### bufferToHex
+
+Convert a Buffer or number array to a hex string.
+
+```typescript
+function bufferToHex(buf: Buffer | number[]): string
+```
+
+**Example:**
+```typescript
+const hex = utils.bufferToHex(Buffer.from([0x12, 0x34]))
+console.log(hex) // '0x1234'
+```
+
+## Solana Address Utilities
+
+### getPda
+
+Get a Program Derived Address (PDA) for Solana.
+
+```typescript
+function getPda(
+  programId: AddressLike,
+  seeds: Uint8Array[]
+): SolanaAddress
+```
+
+**Example:**
+```typescript
+import { utils, SolanaAddress } from '@1inch/cross-chain-sdk'
+
+const programId = SolanaAddress.fromString('...')
+const seeds = [
+  Buffer.from('escrow'),
+  orderHash.toBuffer()
+]
+
+const pda = utils.getPda(programId, seeds)
+```
+
+### getAta
+
+Get the Associated Token Account (ATA) address for Solana.
+
+```typescript
+function getAta(
+  walletAddress: AddressLike,
+  tokenMintAddress: AddressLike,
+  tokenProgramId: AddressLike
+): SolanaAddress
+```
+
+**Example:**
+```typescript
+import { utils, SolanaAddress } from '@1inch/cross-chain-sdk'
+
+const wallet = SolanaAddress.fromString('...')
+const mint = SolanaAddress.fromString('...')
+const tokenProgram = SolanaAddress.fromString('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+
+const ata = utils.getAta(wallet, mint, tokenProgram)
+```
+
+## ID Generation
+
+### id
+
+Generate a random 32-bit unsigned integer ID.
+
+```typescript
+function id(): number
+```
+
+**Example:**
+```typescript
+import { utils } from '@1inch/cross-chain-sdk'
+
+const randomId = utils.id()
+console.log(randomId) // Random number between 0 and 4294967295
+```
+
+## ABI Coder
+
+### coder
+
+Access to the ethers ABI coder for encoding/decoding.
+
+```typescript
+const coder: AbiCoder
+```
+
+**Example:**
+```typescript
+import { utils } from '@1inch/cross-chain-sdk'
+
+const encoded = utils.coder.encode(
+  ['uint256', 'address'],
+  [1000n, '0x...']
+)
+
+const decoded = utils.coder.decode(
+  ['uint256', 'address'],
+  encoded
+)
+```
+
+## Complete Example
+
+Here's a comprehensive example using multiple utilities:
+
+```typescript
+import { utils, Rounding } from '@1inch/cross-chain-sdk'
+
+// Generate a unique ID
+const orderId = utils.id()
+
+// Get current timestamp
+const deadline = utils.now() + 3600 // 1 hour from now
+
+// Validate amount
+const amount = 1000000000000000000n // 1 token (18 decimals)
+utils.assertUInteger(Number(amount / 10n ** 9n)) // Validate reasonable range
+
+// Convert to different formats
+const amountBN = utils.bigintToBN(amount)
+const amountBytes = utils.uint256BorchSerialized(amount)
+const amountHex = utils.bufferToHex(amountBytes)
+
+// Calculate fees (10% = 1000 bps)
+const feeAmount = utils.mulDiv(amount, 1000n, 10000n)
+
+// For Solana: get PDA
+const programId = SolanaAddress.fromString('...')
+const seeds = [Buffer.from('escrow'), Buffer.from(orderId.toString())]
+const escrowPda = utils.getPda(programId, seeds)
+
+console.log({
+  orderId,
+  deadline,
+  amount: amount.toString(),
+  feeAmount: feeAmount.toString(),
+  escrowPda: escrowPda.toString()
+})
+```

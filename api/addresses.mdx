@@ -1,0 +1,613 @@
+---
+title: 'Address Classes'
+description: 'EvmAddress and SolanaAddress classes for handling blockchain addresses'
+---
+
+## Overview
+
+The Cross-Chain SDK provides two address classes to handle different blockchain address formats:
+- `EvmAddress` for EVM-compatible chains (Ethereum, Polygon, BSC, etc.)
+- `SolanaAddress` for Solana blockchain
+
+Both classes implement the `AddressLike` interface and provide methods for conversion, validation, and manipulation.
+
+## EvmAddress
+
+Handles addresses for EVM-compatible blockchains. EVM addresses are 20 bytes (160 bits) and represented as hexadecimal strings with `0x` prefix.
+
+### Static Properties
+
+<ParamField path="ZERO" type="EvmAddress">
+  The zero address: `0x0000000000000000000000000000000000000000`
+</ParamField>
+
+<ParamField path="NATIVE" type="EvmAddress">
+  The native currency address: `0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`
+</ParamField>
+
+### Constructor
+
+```typescript
+new EvmAddress(address: Address)
+```
+
+<ParamField path="address" type="Address" required>
+  An Address instance from @1inch/fusion-sdk
+</ParamField>
+
+### Static Methods
+
+#### fromString
+
+Create an EvmAddress from a string.
+
+```typescript
+EvmAddress.fromString(address: string): EvmAddress
+```
+
+<ParamField path="address" type="string" required>
+  A valid EVM address string (e.g., "0x742d35Cc6634C0532925a3b844Bc454e4438f44e")
+</ParamField>
+
+**Example:**
+```typescript
+import { EvmAddress } from '@1inch/cross-chain-sdk'
+
+const address = EvmAddress.fromString('0x742d35Cc6634C0532925a3b844Bc454e4438f44e')
+```
+
+#### fromBigInt
+
+Create an EvmAddress from a bigint.
+
+```typescript
+EvmAddress.fromBigInt(val: bigint): EvmAddress
+```
+
+<ParamField path="val" type="bigint" required>
+  A bigint representing the address
+</ParamField>
+
+**Example:**
+```typescript
+const address = EvmAddress.fromBigInt(123456789n)
+```
+
+#### fromBuffer
+
+Create an EvmAddress from a Buffer.
+
+```typescript
+EvmAddress.fromBuffer(address: Buffer): EvmAddress
+```
+
+<ParamField path="address" type="Buffer" required>
+  A Buffer containing the address bytes (rightmost 20 bytes are used)
+</ParamField>
+
+#### fromUnknown
+
+Create an EvmAddress from various input types (auto-detection).
+
+```typescript
+EvmAddress.fromUnknown(address: unknown): EvmAddress
+```
+
+<ParamField path="address" type="unknown" required>
+  Can be a string (hex address or bigint string) or bigint
+</ParamField>
+
+**Example:**
+```typescript
+const addr1 = EvmAddress.fromUnknown('0x742d35Cc6634C0532925a3b844Bc454e4438f44e')
+const addr2 = EvmAddress.fromUnknown(123456789n)
+const addr3 = EvmAddress.fromUnknown('123456789')
+```
+
+### Instance Methods
+
+#### nativeAsZero
+
+Convert native address to zero address.
+
+```typescript
+nativeAsZero(): EvmAddress
+```
+
+Returns `EvmAddress.ZERO` if the current address is native (`0xeeee...eeee`), otherwise returns the same address. This is useful because native addresses are represented as zero addresses in smart contracts.
+
+**Example:**
+```typescript
+const native = EvmAddress.NATIVE
+const zero = native.nativeAsZero() // Returns EvmAddress.ZERO
+```
+
+#### zeroAsNative
+
+Convert zero address to native address.
+
+```typescript
+zeroAsNative(): EvmAddress
+```
+
+Returns `EvmAddress.NATIVE` if the current address is zero, otherwise returns the same address.
+
+**Example:**
+```typescript
+const zero = EvmAddress.ZERO
+const native = zero.zeroAsNative() // Returns EvmAddress.NATIVE
+```
+
+#### toBuffer
+
+Convert address to Buffer.
+
+```typescript
+toBuffer(): Buffer
+```
+
+#### toHex
+
+Convert address to hexadecimal string.
+
+```typescript
+toHex(): HexString
+```
+
+Returns a string with `0x` prefix.
+
+#### toBigint
+
+Convert address to bigint.
+
+```typescript
+toBigint(): bigint
+```
+
+#### toString
+
+Convert address to string representation.
+
+```typescript
+toString(): string
+```
+
+**Example:**
+```typescript
+const address = EvmAddress.fromString('0x742d35Cc6634C0532925a3b844Bc454e4438f44e')
+console.log(address.toString()) // "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+```
+
+#### equal
+
+Check if two addresses are equal.
+
+```typescript
+equal(other: AddressLike): boolean
+```
+
+<ParamField path="other" type="AddressLike" required>
+  Another address to compare with
+</ParamField>
+
+**Example:**
+```typescript
+const addr1 = EvmAddress.fromString('0x742d35Cc6634C0532925a3b844Bc454e4438f44e')
+const addr2 = EvmAddress.fromString('0x742d35Cc6634C0532925a3b844Bc454e4438f44e')
+console.log(addr1.equal(addr2)) // true
+```
+
+#### isNative
+
+Check if address is the native currency address.
+
+```typescript
+isNative(): boolean
+```
+
+**Example:**
+```typescript
+const address = EvmAddress.NATIVE
+console.log(address.isNative()) // true
+```
+
+#### isZero
+
+Check if address is the zero address.
+
+```typescript
+isZero(): boolean
+```
+
+**Example:**
+```typescript
+const address = EvmAddress.ZERO
+console.log(address.isZero()) // true
+```
+
+#### splitToParts
+
+Split the address into complement and address parts.
+
+```typescript
+splitToParts(): [AddressComplement, EvmAddress]
+```
+
+For EVM addresses, the complement is always zero since they are exactly 160 bits.
+
+---
+
+## SolanaAddress
+
+Handles addresses for the Solana blockchain. Solana addresses are 32 bytes (256 bits) and represented as base58-encoded strings.
+
+### Static Properties
+
+<ParamField path="ASSOCIATED_TOKEN_PROGRAM_ID" type="SolanaAddress">
+  Associated Token Program ID: `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL`
+</ParamField>
+
+<ParamField path="TOKEN_PROGRAM_ID" type="SolanaAddress">
+  Token Program ID: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+</ParamField>
+
+<ParamField path="TOKEN_2022_PROGRAM_ID" type="SolanaAddress">
+  Token 2022 Program ID: `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`
+</ParamField>
+
+<ParamField path="SYSTEM_PROGRAM_ID" type="SolanaAddress">
+  System Program ID: `11111111111111111111111111111111`
+</ParamField>
+
+<ParamField path="SYSVAR_RENT_ID" type="SolanaAddress">
+  Sysvar Rent ID: `SysvarRent111111111111111111111111111111111`
+</ParamField>
+
+<ParamField path="ZERO" type="SolanaAddress">
+  The zero address (all zeros)
+</ParamField>
+
+<ParamField path="WRAPPED_NATIVE" type="SolanaAddress">
+  Wrapped SOL address: `So11111111111111111111111111111111111111112`
+</ParamField>
+
+<ParamField path="NATIVE" type="SolanaAddress">
+  Native SOL address: `SoNative11111111111111111111111111111111111`
+</ParamField>
+
+### Constructor
+
+```typescript
+new SolanaAddress(value: string)
+```
+
+<ParamField path="value" type="string" required>
+  A valid base58-encoded Solana address (32 bytes when decoded)
+</ParamField>
+
+**Example:**
+```typescript
+import { SolanaAddress } from '@1inch/cross-chain-sdk'
+
+const address = new SolanaAddress('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+```
+
+### Static Methods
+
+#### fromString
+
+Create a SolanaAddress from a base58 string.
+
+```typescript
+SolanaAddress.fromString(str: string): SolanaAddress
+```
+
+<ParamField path="str" type="string" required>
+  A base58-encoded Solana address
+</ParamField>
+
+**Example:**
+```typescript
+const address = SolanaAddress.fromString('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+```
+
+#### fromBigInt
+
+Create a SolanaAddress from a bigint.
+
+```typescript
+SolanaAddress.fromBigInt(val: bigint): SolanaAddress
+```
+
+<ParamField path="val" type="bigint" required>
+  A bigint representing the address (256 bits)
+</ParamField>
+
+**Example:**
+```typescript
+const address = SolanaAddress.fromBigInt(123456789n)
+```
+
+#### fromBuffer
+
+Create a SolanaAddress from a Buffer or Uint8Array.
+
+```typescript
+SolanaAddress.fromBuffer(buf: Buffer | Uint8Array): SolanaAddress
+```
+
+<ParamField path="buf" type="Buffer | Uint8Array" required>
+  A 32-byte buffer containing the address
+</ParamField>
+
+#### fromPublicKey
+
+Create a SolanaAddress from a Solana PublicKey.
+
+```typescript
+SolanaAddress.fromPublicKey(publicKey: web3.PublicKey): SolanaAddress
+```
+
+<ParamField path="publicKey" type="web3.PublicKey" required>
+  A PublicKey instance from @coral-xyz/anchor
+</ParamField>
+
+**Example:**
+```typescript
+import { web3 } from '@coral-xyz/anchor'
+
+const publicKey = new web3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+const address = SolanaAddress.fromPublicKey(publicKey)
+```
+
+#### fromParts
+
+Create a SolanaAddress from complement and EVM address parts.
+
+```typescript
+SolanaAddress.fromParts(parts: [AddressComplement, EvmAddress]): SolanaAddress
+```
+
+<ParamField path="parts" type="[AddressComplement, EvmAddress]" required>
+  A tuple containing the high 96 bits (complement) and low 160 bits (EVM address)
+</ParamField>
+
+This method reconstructs a 256-bit Solana address from its split parts.
+
+**Example:**
+```typescript
+import { AddressComplement, EvmAddress, SolanaAddress } from '@1inch/cross-chain-sdk'
+
+const complement = new AddressComplement(12345n)
+const evmPart = EvmAddress.fromString('0x742d35Cc6634C0532925a3b844Bc454e4438f44e')
+const solanaAddress = SolanaAddress.fromParts([complement, evmPart])
+```
+
+#### fromUnknown
+
+Create a SolanaAddress from various input types (auto-detection).
+
+```typescript
+SolanaAddress.fromUnknown(val: unknown): SolanaAddress
+```
+
+<ParamField path="val" type="unknown" required>
+  Can be a string (base58 or bigint string), bigint, or object with toBuffer method
+</ParamField>
+
+**Example:**
+```typescript
+const addr1 = SolanaAddress.fromUnknown('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+const addr2 = SolanaAddress.fromUnknown(123456789n)
+const addr3 = SolanaAddress.fromUnknown('123456789')
+```
+
+### Instance Methods
+
+#### toString
+
+Convert address to base58 string.
+
+```typescript
+toString(): string
+```
+
+**Example:**
+```typescript
+const address = SolanaAddress.fromString('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+console.log(address.toString()) // "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+```
+
+#### toBuffer
+
+Convert address to Buffer.
+
+```typescript
+toBuffer(): Buffer
+```
+
+#### toHex
+
+Convert address to hexadecimal string.
+
+```typescript
+toHex(): HexString
+```
+
+Returns the address as a hex string with `0x` prefix.
+
+#### toBigint
+
+Convert address to bigint.
+
+```typescript
+toBigint(): bigint
+```
+
+#### equal
+
+Check if two addresses are equal.
+
+```typescript
+equal(other: AddressLike): boolean
+```
+
+<ParamField path="other" type="AddressLike" required>
+  Another address to compare with
+</ParamField>
+
+**Example:**
+```typescript
+const addr1 = SolanaAddress.fromString('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+const addr2 = SolanaAddress.fromString('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+console.log(addr1.equal(addr2)) // true
+```
+
+#### isNative
+
+Check if address is the native SOL address.
+
+```typescript
+isNative(): boolean
+```
+
+**Example:**
+```typescript
+const address = SolanaAddress.NATIVE
+console.log(address.isNative()) // true
+```
+
+#### isZero
+
+Check if address is the zero address.
+
+```typescript
+isZero(): boolean
+```
+
+#### nativeAsZero
+
+No-op for Solana addresses (returns self).
+
+```typescript
+nativeAsZero(): this
+```
+
+#### zeroAsNative
+
+No-op for Solana addresses (returns self).
+
+```typescript
+zeroAsNative(): this
+```
+
+#### splitToParts
+
+Split the 256-bit address into complement and EVM address parts.
+
+```typescript
+splitToParts(): [AddressComplement, EvmAddress]
+```
+
+Returns a tuple where:
+- First element contains the high 96 bits (bits 160-255)
+- Second element contains the low 160 bits as an EvmAddress
+
+**Example:**
+```typescript
+const address = SolanaAddress.fromString('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+const [complement, evmPart] = address.splitToParts()
+console.log(complement.isZero()) // Check if high bits are zero
+console.log(evmPart.toString()) // Get low 160 bits as EVM address
+```
+
+---
+
+## AddressComplement
+
+Represents the high 96 bits of a 256-bit address when split into parts.
+
+### Static Properties
+
+<ParamField path="ZERO" type="AddressComplement">
+  A complement with all zeros
+</ParamField>
+
+### Constructor
+
+```typescript
+new AddressComplement(inner: bigint)
+```
+
+<ParamField path="inner" type="bigint" required>
+  The complement value (must be ≤ 2^160 - 1)
+</ParamField>
+
+### Methods
+
+#### asHex
+
+Convert complement to hexadecimal string.
+
+```typescript
+asHex(): string
+```
+
+Returns the complement as a hex string with `0x` prefix.
+
+#### isZero
+
+Check if complement is zero.
+
+```typescript
+isZero(): boolean
+```
+
+---
+
+## createAddress
+
+Factory function to create the appropriate address type for a given chain.
+
+```typescript
+createAddress<Chain extends SupportedChain>(
+  address: string | bigint,
+  chainId: Chain,
+  complement?: AddressComplement
+): AddressForChain<Chain>
+```
+
+<ParamField path="address" type="string | bigint" required>
+  The address value (hex string, base58 string, or bigint)
+</ParamField>
+
+<ParamField path="chainId" type="SupportedChain" required>
+  The chain ID to determine address type
+</ParamField>
+
+<ParamField path="complement" type="AddressComplement">
+  Optional complement for constructing Solana addresses from EVM-sized values
+</ParamField>
+
+**Returns:** `EvmAddress` for EVM chains, `SolanaAddress` for Solana
+
+**Example:**
+```typescript
+import { createAddress, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+// Create EVM address
+const ethAddr = createAddress(
+  '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
+  NetworkEnum.ETHEREUM
+)
+
+// Create Solana address
+const solAddr = createAddress(
+  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+  NetworkEnum.SOLANA
+)
+```
+
+<Note>
+The address classes are designed to work seamlessly across different blockchain types while maintaining type safety and conversion utilities.
+</Note>

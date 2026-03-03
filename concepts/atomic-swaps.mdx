@@ -1,0 +1,182 @@
+---
+title: Atomic Swaps
+description: Understanding atomic cross-chain swaps in the 1inch Cross-Chain SDK
+---
+
+# Atomic Swaps
+
+Atomic swaps are the foundation of the 1inch Cross-Chain SDK, enabling trustless token exchanges across different blockchain networks without intermediaries.
+
+## What is an Atomic Swap?
+
+An atomic swap is a smart contract technology that enables the exchange of tokens between two parties on different blockchains without requiring a trusted third party. The swap is "atomic" because it either completes in full or doesn't happen at all - there's no possibility of one party receiving funds while the other doesn't.
+
+## The Problem Atomic Swaps Solve
+
+Traditional cross-chain swaps face several challenges:
+
+- **Trust**: Centralized bridges require users to trust the bridge operator
+- **Custody**: Users must give up control of their assets during the swap
+- **Security**: Single points of failure can lead to hacks and lost funds
+- **Censorship**: Centralized operators can freeze or block transactions
+
+<Note>
+Atomic swaps eliminate these issues by using cryptographic guarantees instead of trusted intermediaries. The protocol ensures that either both parties receive their funds, or both parties can reclaim their original assets.
+</Note>
+
+## How It Works
+
+The 1inch Cross-Chain SDK implements atomic swaps through a multi-step process:
+
+### 1. Order Creation
+
+The user (maker) creates a cross-chain order specifying:
+- Source chain and token
+- Destination chain and token
+- Amounts to swap
+- Cryptographic hash lock (commitment to secrets)
+- Time locks for each phase of the swap
+
+```typescript
+const order = await sdk.createOrder(quote, {
+  walletAddress,
+  hashLock,
+  preset,
+  source,
+  secretHashes
+})
+```
+
+### 2. Escrow Deployment
+
+When a resolver picks up the order, they deploy two escrows:
+- **Source escrow**: Locks the maker's tokens on the source chain
+- **Destination escrow**: Locks the resolver's tokens on the destination chain
+
+Both escrows are protected by the same hash lock, ensuring they can only be unlocked with the secret known by the maker.
+
+### 3. Secret Revelation
+
+Once both escrows are deployed, the maker reveals the secret(s) to unlock the destination escrow and claim their tokens.
+
+```typescript
+// Monitor for deployed escrows
+const secretsToShare = await sdk.getReadyToAcceptSecretFills(hash)
+
+// Share secrets to claim funds
+for (const {idx} of secretsToShare.fills) {
+  await sdk.submitSecret(hash, secrets[idx])
+}
+```
+
+### 4. Atomicity Guarantee
+
+The cryptographic hash lock ensures atomicity:
+- When the maker reveals the secret to claim destination tokens, the secret becomes publicly visible on-chain
+- The resolver can immediately use this same secret to unlock the source escrow and claim their tokens
+- If the maker doesn't reveal the secret, both parties can reclaim their funds after the time locks expire
+
+## Safety Mechanisms
+
+The SDK includes multiple safety mechanisms to protect both parties:
+
+### Time Locks
+
+Multiple time-based phases ensure orderly execution:
+- **Finality Lock**: Prevents premature withdrawals before chain finality
+- **Private Withdrawal**: Exclusive period for authorized parties
+- **Public Withdrawal**: Anyone can complete the swap
+- **Cancellation**: Ability to reclaim funds if swap fails
+
+See [Time Locks](./time-locks) for detailed information.
+
+### Safety Deposits
+
+Both parties provide safety deposits that are forfeited if they act maliciously:
+
+```typescript
+const escrowParams = {
+  hashLock,
+  srcChainId,
+  dstChainId,
+  srcSafetyDeposit: 1000000n, // Maker's safety deposit
+  dstSafetyDeposit: 2000000n, // Resolver's safety deposit
+  timeLocks
+}
+```
+
+### Hash Locks
+
+Cryptographic commitments ensure secrets can't be guessed:
+- Secrets are 32-byte random values
+- Hash locks use keccak256 for collision resistance
+- Merkle trees enable multiple partial fills
+
+See [Hash Locks](./hash-locks) for implementation details.
+
+## Order Lifecycle
+
+1. **Created**: Order signed and submitted to relayer network
+2. **Pending**: Waiting for resolver to pick up the order
+3. **Executing**: Escrows deployed, waiting for secret revelation
+4. **Executed**: Secrets revealed, both parties received funds
+5. **Expired**: Time locks expired without completion
+6. **Refunded**: Parties reclaimed their original funds
+
+<Info>
+The SDK provides the `getOrderStatus()` method to monitor order progress through these phases.
+</Info>
+
+## EVM vs Solana Implementation
+
+The SDK supports atomic swaps across both EVM and Solana chains:
+
+### EVM Orders
+
+EVM orders use the Limit Order Protocol with escrow extensions:
+- Orders are signed EIP-712 messages
+- Escrows are smart contracts on each chain
+- Hash locks are 32-byte values stored in contract state
+
+See [Orders - EVM](./orders#evm-orders) for details.
+
+### Solana Orders
+
+Solana orders use native Solana programs:
+- Orders are published on-chain via instruction
+- Escrows are Program Derived Addresses (PDAs)
+- Hash locks use the same 32-byte format for compatibility
+
+See [Orders - Solana](./orders#solana-orders) for details.
+
+## Security Considerations
+
+<Warning>
+Always verify escrow addresses before revealing secrets. The SDK provides helper methods, but it's your responsibility to ensure:
+- Escrows are deployed on the correct chains
+- Token amounts match your order
+- Time locks provide sufficient time for secret revelation
+</Warning>
+
+### Best Practices
+
+1. **Generate Strong Secrets**: Use cryptographically secure random number generators
+2. **Verify Escrows**: Check escrow addresses and parameters before sharing secrets
+3. **Monitor Time Locks**: Ensure you reveal secrets before cancellation periods
+4. **Use Recommended Presets**: Start with SDK presets rather than custom configurations
+
+```typescript
+import { randomBytes } from 'crypto'
+
+// Generate cryptographically secure secrets
+const secrets = Array.from({ length: secretsCount }).map(
+  () => '0x' + randomBytes(32).toString('hex')
+)
+```
+
+## Learn More
+
+- [Hash Locks](./hash-locks) - Cryptographic commitments and merkle trees
+- [Orders](./orders) - Order structure and lifecycle
+- [Presets](./presets) - Pre-configured swap parameters
+- [Time Locks](./time-locks) - Temporal safety mechanisms

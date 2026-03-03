@@ -1,0 +1,494 @@
+---
+title: "HashLock"
+description: "HashLock class for secure escrow secret management and merkle tree construction"
+---
+
+The `HashLock` class provides utilities for creating and managing hash locks used in cross-chain escrow security. It supports both single-fill and multiple-fill orders through merkle tree construction.
+
+## Static Properties
+
+<ResponseField name="Web3Type" type="string">
+  The Solidity type for HashLock values: `"bytes32"`
+</ResponseField>
+
+---
+
+## Static Methods
+
+### hashSecret()
+
+Hashes a secret using keccak256.
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+const secret = '0x' + randomBytes(32).toString('hex')
+const secretHash = HashLock.hashSecret(secret)
+```
+
+#### Parameters
+
+<ParamField path="secret" type="string" required>
+  32-byte hex-encoded secret (with 0x prefix)
+</ParamField>
+
+#### Returns
+
+<ResponseField name="secretHash" type="string">
+  Keccak256 hash of the secret
+</ResponseField>
+
+#### Throws
+
+<ResponseField name="AssertionError" type="Error">
+  If secret is not 32 bytes hex encoded
+</ResponseField>
+
+### getMerkleLeaves()
+
+Generates merkle tree leaves from secrets.
+
+```typescript
+const secrets = [
+  '0x1234...', // 32 bytes
+  '0x5678...', // 32 bytes
+  '0x9abc...'  // 32 bytes
+]
+
+const leaves = HashLock.getMerkleLeaves(secrets)
+```
+
+<Info>
+  Each leaf is created by hashing `solidityPackedKeccak256(['uint64', 'bytes32'], [index, secretHash])`
+</Info>
+
+#### Parameters
+
+<ParamField path="secrets" type="string[]" required>
+  Array of 32-byte hex-encoded secrets
+</ParamField>
+
+#### Returns
+
+<ResponseField name="leaves" type="MerkleLeaf[]">
+  Array of merkle leaves (indexed secret hashes)
+</ResponseField>
+
+### getMerkleLeavesFromSecretHashes()
+
+Generates merkle tree leaves from pre-hashed secrets.
+
+```typescript
+const secretHashes = [
+  HashLock.hashSecret(secret1),
+  HashLock.hashSecret(secret2),
+  HashLock.hashSecret(secret3)
+]
+
+const leaves = HashLock.getMerkleLeavesFromSecretHashes(secretHashes)
+```
+
+#### Parameters
+
+<ParamField path="secretHashes" type="string[]" required>
+  Array of secret hashes
+</ParamField>
+
+#### Returns
+
+<ResponseField name="leaves" type="MerkleLeaf[]">
+  Array of merkle leaves
+</ResponseField>
+
+### getProof()
+
+Generates a merkle proof for a specific leaf.
+
+```typescript
+const leaves = HashLock.getMerkleLeaves(secrets)
+const proof = HashLock.getProof(leaves, 0) // proof for first secret
+```
+
+<Info>
+  Uses OpenZeppelin's SimpleMerkleTree implementation for proof generation.
+</Info>
+
+#### Parameters
+
+<ParamField path="leaves" type="string[]" required>
+  Array of merkle leaves
+</ParamField>
+
+<ParamField path="idx" type="number" required>
+  Index of the leaf to generate proof for
+</ParamField>
+
+#### Returns
+
+<ResponseField name="proof" type="MerkleLeaf[]">
+  Merkle proof (array of sibling hashes)
+</ResponseField>
+
+### fromString()
+
+Creates a HashLock instance from a hex string.
+
+```typescript
+const hashLock = HashLock.fromString('0x1234...')
+```
+
+#### Parameters
+
+<ParamField path="value" type="string" required>
+  32-byte hex-encoded hash lock value
+</ParamField>
+
+#### Returns
+
+<ResponseField name="HashLock" type="HashLock">
+  HashLock instance
+</ResponseField>
+
+#### Throws
+
+<ResponseField name="AssertionError" type="Error">
+  If value is not 32 bytes hex encoded
+</ResponseField>
+
+### fromBuffer()
+
+Creates a HashLock instance from a Buffer.
+
+```typescript
+const buffer = Buffer.from('1234...', 'hex')
+const hashLock = HashLock.fromBuffer(buffer)
+```
+
+#### Parameters
+
+<ParamField path="value" type="Buffer" required>
+  32-byte Buffer
+</ParamField>
+
+#### Returns
+
+<ResponseField name="HashLock" type="HashLock">
+  HashLock instance
+</ResponseField>
+
+### forSingleFill()
+
+Creates a HashLock for single-fill orders.
+
+```typescript
+import { randomBytes } from 'crypto'
+
+const secret = '0x' + randomBytes(32).toString('hex')
+const hashLock = HashLock.forSingleFill(secret)
+```
+
+<Info>
+  This is the recommended method for creating hash locks for orders that should be filled once.
+</Info>
+
+#### Parameters
+
+<ParamField path="secret" type="string" required>
+  32-byte hex-encoded secret
+</ParamField>
+
+#### Returns
+
+<ResponseField name="HashLock" type="HashLock">
+  HashLock instance containing keccak256(secret)
+</ResponseField>
+
+### forMultipleFills()
+
+Creates a HashLock for multiple-fill orders using a merkle root.
+
+```typescript
+import { randomBytes } from 'crypto'
+
+// Generate secrets
+const secrets = Array.from({ length: 5 }, () => 
+  '0x' + randomBytes(32).toString('hex')
+)
+
+// Create merkle tree
+const secretHashes = secrets.map(HashLock.hashSecret)
+const leaves = HashLock.getMerkleLeavesFromSecretHashes(secretHashes)
+
+// Create hash lock
+const hashLock = HashLock.forMultipleFills(leaves)
+```
+
+<Warning>
+  The leaves array must contain more than 2 elements. For single or double fills, use `forSingleFill()`.
+</Warning>
+
+#### Parameters
+
+<ParamField path="leaves" type="MerkleLeaf[]" required>
+  Array of merkle leaves (must be > 2)
+</ParamField>
+
+#### Returns
+
+<ResponseField name="HashLock" type="HashLock">
+  HashLock instance containing merkle root with embedded leaf count
+</ResponseField>
+
+#### Throws
+
+<ResponseField name="AssertionError" type="Error">
+  If leaves array has 2 or fewer elements
+</ResponseField>
+
+---
+
+## Instance Methods
+
+### getPartsCount()
+
+Retrieves the number of secrets in a multiple-fill hash lock.
+
+```typescript
+const hashLock = HashLock.forMultipleFills(leaves)
+const count = hashLock.getPartsCount()
+console.log(`This order supports ${count} fills`)
+```
+
+<Warning>
+  Only use this method on hash locks created with `forMultipleFills()`. Returns garbage for single-fill hash locks.
+</Warning>
+
+#### Returns
+
+<ResponseField name="count" type="bigint">
+  Number of parts/fills (leaves.length - 1)
+</ResponseField>
+
+### toString()
+
+Converts the hash lock to a hex string.
+
+```typescript
+const hashLockStr = hashLock.toString()
+console.log(hashLockStr) // '0x1234...'
+```
+
+#### Returns
+
+<ResponseField name="value" type="string">
+  Hex-encoded hash lock value
+</ResponseField>
+
+### toJSON()
+
+Serializes the hash lock to JSON.
+
+```typescript
+const json = hashLock.toJSON()
+```
+
+#### Returns
+
+<ResponseField name="value" type="string">
+  Hex-encoded hash lock value
+</ResponseField>
+
+### toBuffer()
+
+Converts the hash lock to a Buffer.
+
+```typescript
+const buffer = hashLock.toBuffer()
+```
+
+#### Returns
+
+<ResponseField name="buffer" type="Buffer">
+  32-byte Buffer
+</ResponseField>
+
+### eq()
+
+Checks equality with another hash lock.
+
+```typescript
+if (hashLock1.eq(hashLock2)) {
+  console.log('Hash locks are equal')
+}
+```
+
+#### Parameters
+
+<ParamField path="other" type="HashLock" required>
+  HashLock to compare with
+</ParamField>
+
+#### Returns
+
+<ResponseField name="equal" type="boolean">
+  `true` if hash locks are equal, `false` otherwise
+</ResponseField>
+
+---
+
+## Types
+
+### MerkleLeaf
+
+```typescript
+type MerkleLeaf = string & { _tag: 'MerkleLeaf' }
+```
+
+Branded type for merkle tree leaves to ensure type safety.
+
+---
+
+## Usage Examples
+
+### Single Fill Order
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+// Generate secret
+const secret = '0x' + randomBytes(32).toString('hex')
+
+// Create hash lock
+const hashLock = HashLock.forSingleFill(secret)
+const secretHash = HashLock.hashSecret(secret)
+
+// Use in order
+const order = quote.createEvmOrder({
+  hashLock,
+  // ... other params
+})
+
+// Later, reveal the secret to claim funds
+await sdk.submitSecret(orderHash, secret)
+```
+
+### Multiple Fills Order
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+// Generate 5 secrets for 5 fills
+const secrets = Array.from({ length: 5 }, () => 
+  '0x' + randomBytes(32).toString('hex')
+)
+
+// Hash secrets
+const secretHashes = secrets.map(HashLock.hashSecret)
+
+// Create merkle leaves
+const leaves = HashLock.getMerkleLeavesFromSecretHashes(secretHashes)
+
+// Create hash lock
+const hashLock = HashLock.forMultipleFills(leaves)
+
+console.log('Parts count:', hashLock.getPartsCount()) // 4n (5 - 1)
+
+// Use in order
+const order = quote.createEvmOrder({
+  hashLock,
+  // ... other params
+})
+
+// Submit order with all secret hashes
+await sdk.submitOrder(
+  srcChainId,
+  order,
+  quoteId,
+  secretHashes
+)
+```
+
+### Generating Merkle Proofs
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+
+const secrets = [
+  '0xsecret1...',
+  '0xsecret2...',
+  '0xsecret3...'
+]
+
+// Create leaves
+const leaves = HashLock.getMerkleLeaves(secrets)
+
+// Create hash lock
+const hashLock = HashLock.forMultipleFills(leaves)
+
+// When revealing first secret, generate proof
+const proof0 = HashLock.getProof(leaves, 0)
+const proof1 = HashLock.getProof(leaves, 1)
+const proof2 = HashLock.getProof(leaves, 2)
+
+// Use proofs when claiming from escrow contract
+```
+
+### Working with Existing Hash Locks
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+
+// From API response
+const hashLockValue = '0x1234...'
+const hashLock = HashLock.fromString(hashLockValue)
+
+// Convert to different formats
+const str = hashLock.toString()
+const buffer = hashLock.toBuffer()
+const json = hashLock.toJSON()
+
+// Check if it's a multiple-fill order
+try {
+  const count = hashLock.getPartsCount()
+  console.log(`Multiple fills order with ${count} parts`)
+} catch (e) {
+  console.log('Single fill order or invalid count')
+}
+```
+
+### Validating Secrets
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+
+// Validate secret format
+function isValidSecret(secret: string): boolean {
+  try {
+    HashLock.hashSecret(secret)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+const secret = '0x' + randomBytes(32).toString('hex')
+console.log(isValidSecret(secret)) // true
+console.log(isValidSecret('0x1234')) // false (too short)
+```
+
+### Comparing Hash Locks
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+
+const secret = '0xabc...'
+const hashLock1 = HashLock.forSingleFill(secret)
+const hashLock2 = HashLock.forSingleFill(secret)
+const hashLock3 = HashLock.fromString(hashLock1.toString())
+
+console.log(hashLock1.eq(hashLock2)) // true
+console.log(hashLock1.eq(hashLock3)) // true
+```

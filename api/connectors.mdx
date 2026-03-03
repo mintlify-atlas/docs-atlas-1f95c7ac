@@ -1,0 +1,545 @@
+---
+title: 'Blockchain Connectors'
+description: 'PrivateKeyProviderConnector, Web3ProviderConnector, and BlockchainProviderConnector for signing transactions'
+---
+
+## Overview
+
+Blockchain connectors provide the interface between the Cross-Chain SDK and your signing infrastructure. They handle transaction signing, typed data signing, and blockchain RPC calls.
+
+The SDK exports three main connector types from `@1inch/fusion-sdk`:
+- `PrivateKeyProviderConnector` - Sign with a private key
+- `Web3ProviderConnector` - Sign with a Web3 provider
+- `BlockchainProviderConnector` - Interface for custom implementations
+
+## BlockchainProviderConnector
+
+Interface that defines the contract for blockchain provider implementations.
+
+```typescript
+interface BlockchainProviderConnector {
+  signTypedData(
+    walletAddress: string,
+    typedData: EIP712TypedData
+  ): Promise<string>
+
+  ethCall(contractAddress: string, callData: string): Promise<string>
+}
+```
+
+### Methods
+
+#### signTypedData
+
+Sign EIP-712 typed data for creating orders.
+
+```typescript
+signTypedData(
+  walletAddress: string,
+  typedData: EIP712TypedData
+): Promise<string>
+```
+
+<ParamField path="walletAddress" type="string" required>
+  The wallet address that will sign the data
+</ParamField>
+
+<ParamField path="typedData" type="EIP712TypedData" required>
+  The typed data to sign (EIP-712 format)
+</ParamField>
+
+**Returns:** Promise resolving to the signature string
+
+#### ethCall
+
+Execute a read-only call to a smart contract.
+
+```typescript
+ethCall(contractAddress: string, callData: string): Promise<string>
+```
+
+<ParamField path="contractAddress" type="string" required>
+  The contract address to call
+</ParamField>
+
+<ParamField path="callData" type="string" required>
+  The encoded function call data
+</ParamField>
+
+**Returns:** Promise resolving to the call result
+
+## PrivateKeyProviderConnector
+
+A connector implementation that uses a private key for signing. Best for server-side applications and testing.
+
+```typescript
+import { PrivateKeyProviderConnector } from '@1inch/cross-chain-sdk'
+```
+
+### Constructor
+
+```typescript
+new PrivateKeyProviderConnector(privateKey: string, web3Provider: Web3Provider)
+```
+
+<ParamField path="privateKey" type="string" required>
+  The private key in hex format (with or without 0x prefix)
+</ParamField>
+
+<ParamField path="web3Provider" type="Web3Provider" required>
+  A Web3-compatible provider for making RPC calls
+</ParamField>
+
+### Example with Web3.js
+
+```typescript
+import { PrivateKeyProviderConnector, SDK } from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+
+const privateKey = '0x1234567890abcdef...' // Your private key
+const rpcUrl = 'https://ethereum-rpc.publicnode.com'
+
+const web3 = new Web3(rpcUrl)
+
+const connector = new PrivateKeyProviderConnector(privateKey, web3)
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key',
+  blockchainProvider: connector
+})
+```
+
+### Example with Ethers.js v6
+
+```typescript
+import { PrivateKeyProviderConnector, SDK } from '@1inch/cross-chain-sdk'
+import { JsonRpcProvider } from 'ethers'
+
+const privateKey = '0x1234567890abcdef...'
+const rpcUrl = 'https://ethereum-rpc.publicnode.com'
+
+const ethersRpcProvider = new JsonRpcProvider(rpcUrl)
+
+// Create a minimal Web3-compatible wrapper
+const ethersProviderConnector = {
+  eth: {
+    call(transactionConfig): Promise<string> {
+      return ethersRpcProvider.call(transactionConfig)
+    }
+  },
+  extend(): void {}
+}
+
+const connector = new PrivateKeyProviderConnector(
+  privateKey,
+  ethersProviderConnector
+)
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key',
+  blockchainProvider: connector
+})
+```
+
+### Full Example: Creating and Signing an Order
+
+```typescript
+import {
+  PrivateKeyProviderConnector,
+  SDK,
+  NetworkEnum,
+  HashLock,
+  EvmCrossChainOrder
+} from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+import { randomBytes } from 'crypto'
+
+const privateKey = '0x1234567890abcdef...'
+const rpcUrl = 'https://ethereum-rpc.publicnode.com'
+
+const web3 = new Web3(rpcUrl)
+const walletAddress = web3.eth.accounts.privateKeyToAccount(privateKey).address
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key',
+  blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3)
+})
+
+async function createAndSignOrder() {
+  // Get quote
+  const quote = await sdk.getQuote({
+    srcChainId: NetworkEnum.ETHEREUM,
+    dstChainId: NetworkEnum.POLYGON,
+    srcTokenAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7', // USDT
+    dstTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f', // USDT on Polygon
+    amount: '1000000', // 1 USDT
+    walletAddress,
+    enableEstimate: true
+  })
+
+  // Generate secrets for the order
+  const preset = quote.recommendedPreset
+  const secrets = Array.from({ length: quote.presets[preset].secretsCount })
+    .map(() => '0x' + randomBytes(32).toString('hex'))
+
+  const hashLock = secrets.length === 1
+    ? HashLock.forSingleFill(secrets[0])
+    : HashLock.forMultipleFills(HashLock.getMerkleLeaves(secrets))
+
+  const secretHashes = secrets.map(s => HashLock.hashSecret(s))
+
+  // Create order (automatically signs using the connector)
+  const { hash, quoteId, order } = sdk.createOrder(quote, {
+    walletAddress,
+    hashLock,
+    preset,
+    secretHashes
+  })
+
+  // Submit order (also uses the connector for signing)
+  const orderInfo = await sdk.submitOrder(
+    quote.srcChainId,
+    order as EvmCrossChainOrder,
+    quoteId,
+    secretHashes
+  )
+
+  console.log('Order created and submitted:', orderInfo.orderHash)
+  
+  return { orderInfo, secrets }
+}
+
+createAndSignOrder().catch(console.error)
+```
+
+## Web3ProviderConnector
+
+A connector that uses a Web3 provider with signing capabilities. Useful for browser-based wallets like MetaMask.
+
+```typescript
+import { Web3ProviderConnector } from '@1inch/cross-chain-sdk'
+```
+
+### Constructor
+
+```typescript
+new Web3ProviderConnector(web3Provider: Web3Provider)
+```
+
+<ParamField path="web3Provider" type="Web3Provider" required>
+  A Web3 provider instance with signing capabilities
+</ParamField>
+
+### Example with MetaMask (Browser)
+
+```typescript
+import { Web3ProviderConnector, SDK } from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+
+// Check if MetaMask is installed
+if (typeof window.ethereum !== 'undefined') {
+  // Request account access
+  await window.ethereum.request({ method: 'eth_requestAccounts' })
+  
+  const web3 = new Web3(window.ethereum)
+  const connector = new Web3ProviderConnector(web3)
+
+  const sdk = new SDK({
+    url: 'https://api.1inch.com/fusion-plus',
+    authKey: 'your-auth-key',
+    blockchainProvider: connector
+  })
+
+  // Get wallet address from provider
+  const accounts = await web3.eth.getAccounts()
+  const walletAddress = accounts[0]
+
+  // Create and sign orders - signatures will prompt MetaMask
+  const quote = await sdk.getQuote({
+    srcChainId: NetworkEnum.ETHEREUM,
+    dstChainId: NetworkEnum.POLYGON,
+    srcTokenAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+    dstTokenAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+    amount: '1000000',
+    walletAddress,
+    enableEstimate: true
+  })
+} else {
+  console.error('MetaMask not installed')
+}
+```
+
+### Example with WalletConnect
+
+```typescript
+import { Web3ProviderConnector, SDK } from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+import WalletConnectProvider from '@walletconnect/web3-provider'
+
+// Create WalletConnect Provider
+const provider = new WalletConnectProvider({
+  rpc: {
+    1: 'https://ethereum-rpc.publicnode.com',
+    137: 'https://polygon-rpc.com'
+  }
+})
+
+// Enable session (triggers QR Code modal)
+await provider.enable()
+
+const web3 = new Web3(provider as any)
+const connector = new Web3ProviderConnector(web3)
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key',
+  blockchainProvider: connector
+})
+```
+
+## Custom Connector Implementation
+
+You can implement your own connector by adhering to the `BlockchainProviderConnector` interface.
+
+### Example: Custom Hardware Wallet Connector
+
+```typescript
+import { 
+  BlockchainProviderConnector, 
+  EIP712TypedData 
+} from '@1inch/cross-chain-sdk'
+import { ethers } from 'ethers'
+
+class HardwareWalletConnector implements BlockchainProviderConnector {
+  constructor(
+    private hardwareWallet: any,
+    private rpcProvider: ethers.JsonRpcProvider
+  ) {}
+
+  async signTypedData(
+    walletAddress: string,
+    typedData: EIP712TypedData
+  ): Promise<string> {
+    // Sign using hardware wallet
+    const signature = await this.hardwareWallet.signTypedData(
+      typedData.domain,
+      typedData.types,
+      typedData.message
+    )
+    return signature
+  }
+
+  async ethCall(contractAddress: string, callData: string): Promise<string> {
+    // Use RPC provider for read-only calls
+    const result = await this.rpcProvider.call({
+      to: contractAddress,
+      data: callData
+    })
+    return result
+  }
+}
+
+// Usage
+const connector = new HardwareWalletConnector(myLedger, rpcProvider)
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key',
+  blockchainProvider: connector
+})
+```
+
+### Example: Multi-Signer Connector
+
+```typescript
+import { 
+  BlockchainProviderConnector, 
+  EIP712TypedData,
+  SDK 
+} from '@1inch/cross-chain-sdk'
+import { ethers } from 'ethers'
+
+class MultiSigConnector implements BlockchainProviderConnector {
+  private signers: Map<string, ethers.Wallet> = new Map()
+
+  constructor(
+    signers: Array<{ address: string; privateKey: string }>,
+    private rpcProvider: ethers.JsonRpcProvider
+  ) {
+    signers.forEach(({ address, privateKey }) => {
+      const wallet = new ethers.Wallet(privateKey, rpcProvider)
+      this.signers.set(address.toLowerCase(), wallet)
+    })
+  }
+
+  async signTypedData(
+    walletAddress: string,
+    typedData: EIP712TypedData
+  ): Promise<string> {
+    const signer = this.signers.get(walletAddress.toLowerCase())
+    if (!signer) {
+      throw new Error(`No signer configured for address ${walletAddress}`)
+    }
+
+    const signature = await signer.signTypedData(
+      typedData.domain,
+      typedData.types,
+      typedData.message
+    )
+    return signature
+  }
+
+  async ethCall(contractAddress: string, callData: string): Promise<string> {
+    const result = await this.rpcProvider.call({
+      to: contractAddress,
+      data: callData
+    })
+    return result
+  }
+}
+
+// Usage
+const connector = new MultiSigConnector(
+  [
+    { address: '0xAAA...', privateKey: '0x111...' },
+    { address: '0xBBB...', privateKey: '0x222...' }
+  ],
+  rpcProvider
+)
+```
+
+## HttpProviderConnector
+
+Interface for custom HTTP providers (for API calls, not signing).
+
+```typescript
+interface HttpProviderConnector {
+  get<T>(url: string): Promise<T>
+  post<T>(url: string, data: unknown): Promise<T>
+}
+```
+
+### Custom HTTP Provider Example
+
+```typescript
+import { HttpProviderConnector, SDK } from '@1inch/cross-chain-sdk'
+import axios from 'axios'
+
+class CustomHttpProvider implements HttpProviderConnector {
+  constructor(private apiKey: string) {}
+
+  async get<T>(url: string): Promise<T> {
+    const response = await axios.get(url, {
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'X-Custom-Header': 'value'
+      }
+    })
+    return response.data
+  }
+
+  async post<T>(url: string, data: unknown): Promise<T> {
+    const response = await axios.post(url, data, {
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'X-Custom-Header': 'value'
+      }
+    })
+    return response.data
+  }
+}
+
+// Usage
+const httpProvider = new CustomHttpProvider('my-api-key')
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key',
+  httpProvider // Custom HTTP provider
+  // blockchainProvider is optional if you only read data
+})
+```
+
+## Configuration Examples
+
+### Read-Only Configuration (No Signing)
+
+```typescript
+import { SDK } from '@1inch/cross-chain-sdk'
+
+// SDK without blockchain provider - can only read data
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key'
+  // No blockchainProvider - cannot create/sign orders
+})
+
+// These methods work without a connector:
+const orders = await sdk.getActiveOrders()
+const status = await sdk.getOrderStatus('0xabc...')
+const quote = await sdk.getQuote({
+  srcChainId: NetworkEnum.ETHEREUM,
+  dstChainId: NetworkEnum.POLYGON,
+  srcTokenAddress: '0x...',
+  dstTokenAddress: '0x...',
+  amount: '1000000',
+  walletAddress: '0x...',
+  enableEstimate: false // No signing needed
+})
+
+// These methods will throw an error:
+// await sdk.placeOrder(...) // ✗ Requires blockchainProvider
+// await sdk.signOrder(...) // ✗ Requires blockchainProvider
+```
+
+### Full Configuration with All Options
+
+```typescript
+import { 
+  SDK, 
+  PrivateKeyProviderConnector,
+  HttpProviderConnector 
+} from '@1inch/cross-chain-sdk'
+import Web3 from 'web3'
+
+const privateKey = '0x...'
+const web3 = new Web3('https://ethereum-rpc.publicnode.com')
+
+class CustomHttpProvider implements HttpProviderConnector {
+  async get<T>(url: string): Promise<T> {
+    const response = await fetch(url)
+    return response.json()
+  }
+
+  async post<T>(url: string, data: unknown): Promise<T> {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    return response.json()
+  }
+}
+
+const sdk = new SDK({
+  url: 'https://api.1inch.com/fusion-plus',
+  authKey: 'your-auth-key',
+  blockchainProvider: new PrivateKeyProviderConnector(privateKey, web3),
+  httpProvider: new CustomHttpProvider()
+})
+```
+
+<Note>
+The `blockchainProvider` is only required if you need to create and sign orders. For read-only operations like fetching quotes or order status, you can omit it.
+</Note>
+
+<Tip>
+For production environments, use `Web3ProviderConnector` with user wallets (MetaMask, WalletConnect) for better security. Use `PrivateKeyProviderConnector` only for server-side applications or testing.
+</Tip>
+
+<Warning>
+Never expose private keys in client-side code. Always use secure key management practices and environment variables for sensitive credentials.
+</Warning>

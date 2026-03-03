@@ -1,0 +1,440 @@
+---
+title: "Quote"
+description: "Quote class for cross-chain swap quotes and order creation"
+---
+
+The `Quote` class represents a cross-chain swap quote returned from the API. It contains pricing information, auction parameters, and methods to create orders.
+
+## Type Parameters
+
+```typescript
+class Quote<
+  SrcChain extends SupportedChain = SupportedChain,
+  DstChain extends SupportedChain = SupportedChain
+>
+```
+
+<ParamField path="SrcChain" type="SupportedChain">
+  Source chain type (EVM or Solana)
+</ParamField>
+
+<ParamField path="DstChain" type="SupportedChain">
+  Destination chain type (EVM or Solana)
+</ParamField>
+
+## Properties
+
+<ResponseField name="srcChainId" type="SrcChain">
+  Source chain ID
+</ResponseField>
+
+<ResponseField name="dstChainId" type="DstChain">
+  Destination chain ID
+</ResponseField>
+
+<ResponseField name="quoteId" type="string | null">
+  Unique quote identifier (null if `enableEstimate` was false)
+</ResponseField>
+
+<ResponseField name="srcTokenAmount" type="bigint">
+  Source token amount (in wei/smallest unit)
+</ResponseField>
+
+<ResponseField name="dstTokenAmount" type="bigint">
+  Destination token amount (in wei/smallest unit)
+</ResponseField>
+
+<ResponseField name="presets" type="Presets">
+  Available auction presets (fast/medium/slow/custom)
+</ResponseField>
+
+<ResponseField name="srcEscrowFactory" type="AddressForChain<SrcChain>">
+  Source chain escrow factory address
+</ResponseField>
+
+<ResponseField name="dstEscrowFactory" type="AddressForChain<DstChain>">
+  Destination chain escrow factory address
+</ResponseField>
+
+<ResponseField name="timeLocks" type="TimeLocksRaw">
+  Time lock parameters for escrow security
+</ResponseField>
+
+<ResponseField name="srcSafetyDeposit" type="bigint">
+  Safety deposit amount on source chain
+</ResponseField>
+
+<ResponseField name="dstSafetyDeposit" type="bigint">
+  Safety deposit amount on destination chain
+</ResponseField>
+
+<ResponseField name="whitelist" type="EvmAddress[]">
+  Resolver whitelist (EVM only, empty array for Solana)
+</ResponseField>
+
+<ResponseField name="recommendedPreset" type="PresetEnum">
+  Recommended auction preset (fast/medium/slow)
+</ResponseField>
+
+<ResponseField name="prices" type="Cost">
+  Token price information
+</ResponseField>
+
+<ResponseField name="volume" type="Cost">
+  Trade volume information
+</ResponseField>
+
+<ResponseField name="slippage" type="number">
+  Slippage tolerance
+</ResponseField>
+
+<ResponseField name="nativeOrderFactory" type="ProxyFactory">
+  Native order factory (only for native asset orders)
+</ResponseField>
+
+<ResponseField name="resolverFee" type="ResolverFeeParams">
+  Resolver fee configuration
+</ResponseField>
+
+<ResponseField name="integratorFee" type="IntegratorFeeResponse">
+  Integrator fee configuration
+</ResponseField>
+
+---
+
+## Static Methods
+
+### fromEVMQuote()
+
+Creates a Quote instance from an EVM quote response.
+
+```typescript
+const quote = Quote.fromEVMQuote(request, response)
+```
+
+<Info>
+  This is typically called internally by the SDK. You usually don't need to call this directly.
+</Info>
+
+#### Parameters
+
+<ParamField path="request" type="QuoterRequest<EvmChain>" required>
+  Original quote request
+</ParamField>
+
+<ParamField path="response" type="QuoterResponse" required>
+  Quote response from API
+</ParamField>
+
+#### Returns
+
+<ResponseField name="Quote" type="Quote<EvmChain>">
+  Quote instance for EVM source chain
+</ResponseField>
+
+### fromSolanaQuote()
+
+Creates a Quote instance from a Solana quote response.
+
+```typescript
+const quote = Quote.fromSolanaQuote(request, response)
+```
+
+#### Parameters
+
+<ParamField path="request" type="QuoterRequest<SolanaChain>" required>
+  Original quote request
+</ParamField>
+
+<ParamField path="response" type="QuoterResponse" required>
+  Quote response from API
+</ParamField>
+
+#### Returns
+
+<ResponseField name="Quote" type="Quote<SolanaChain>">
+  Quote instance for Solana source chain
+</ResponseField>
+
+---
+
+## Instance Methods
+
+### createEvmOrder()
+
+Creates an EVM cross-chain order from the quote.
+
+```typescript
+const order = quote.createEvmOrder({
+  hashLock: HashLock.forSingleFill(secret),
+  receiver: EvmAddress.fromString('0x...'),
+  preset: PresetEnum.fast,
+  nonce: 123456n
+})
+```
+
+<Warning>
+  Can only be called on quotes with EVM source chain. Use `isEvmQuote()` to check.
+</Warning>
+
+#### Parameters
+
+<ParamField path="params" type="EvmCrossChainOrderParamsData" required>
+  <ParamField path="hashLock" type="HashLock" required>
+    Hash lock for escrow security
+  </ParamField>
+  
+  <ParamField path="receiver" type="AddressForChain<SupportedChain>">
+    Receiver address on destination chain (defaults to maker)
+  </ParamField>
+  
+  <ParamField path="preset" type="PresetEnum">
+    Auction preset (defaults to recommended preset)
+  </ParamField>
+  
+  <ParamField path="nonce" type="bigint">
+    Order nonce (auto-generated if not provided for required cases)
+  </ParamField>
+  
+  <ParamField path="permit" type="string">
+    Permit signature for gasless approval
+  </ParamField>
+  
+  <ParamField path="isPermit2" type="boolean">
+    Use Permit2 for token approval
+  </ParamField>
+  
+  <ParamField path="delayAuctionStartTimeBy" type="bigint">
+    Delay auction start time by this many seconds
+  </ParamField>
+  
+  <ParamField path="orderExpirationDelay" type="bigint">
+    Order expiration delay after auction ends (default: 12s)
+  </ParamField>
+</ParamField>
+
+#### Returns
+
+<ResponseField name="EvmCrossChainOrder" type="EvmCrossChainOrder">
+  EVM cross-chain order instance
+</ResponseField>
+
+### createSolanaOrder()
+
+Creates a Solana cross-chain order from the quote.
+
+```typescript
+const order = quote.createSolanaOrder({
+  hashLock: HashLock.forSingleFill(secret),
+  receiver: EvmAddress.fromString('0x...'), // destination is EVM
+  preset: PresetEnum.medium
+})
+```
+
+<Warning>
+  Can only be called on quotes with Solana source chain. Use `isSolanaQuote()` to check.
+</Warning>
+
+#### Parameters
+
+<ParamField path="params" type="SvmCrossChainOrderParamsData" required>
+  <ParamField path="hashLock" type="HashLock" required>
+    Hash lock for escrow security
+  </ParamField>
+  
+  <ParamField path="receiver" type="EvmAddress" required>
+    Receiver address on destination chain (required for Solana)
+  </ParamField>
+  
+  <ParamField path="preset" type="PresetEnum">
+    Auction preset (defaults to recommended preset)
+  </ParamField>
+  
+  <ParamField path="resolverCancellationConfig" type="ResolverCancellationConfig">
+    Resolver cancellation configuration
+  </ParamField>
+  
+  <ParamField path="salt" type="bigint">
+    Order salt for uniqueness
+  </ParamField>
+  
+  <ParamField path="delayAuctionStartTimeBy" type="bigint">
+    Delay auction start time by this many seconds
+  </ParamField>
+  
+  <ParamField path="orderExpirationDelay" type="bigint">
+    Order expiration delay after auction ends (default: 12s)
+  </ParamField>
+</ParamField>
+
+#### Returns
+
+<ResponseField name="SvmCrossChainOrder" type="SvmCrossChainOrder">
+  Solana cross-chain order instance
+</ResponseField>
+
+### isEvmQuote()
+
+Type guard to check if this is an EVM quote.
+
+```typescript
+if (quote.isEvmQuote()) {
+  // TypeScript knows this is Quote<EvmChain>
+  const order = quote.createEvmOrder(params)
+}
+```
+
+#### Returns
+
+<ResponseField name="boolean" type="boolean">
+  `true` if source chain is EVM, `false` otherwise
+</ResponseField>
+
+### isSolanaQuote()
+
+Type guard to check if this is a Solana quote.
+
+```typescript
+if (quote.isSolanaQuote()) {
+  // TypeScript knows this is Quote<SolanaChain>
+  const order = quote.createSolanaOrder(params)
+}
+```
+
+#### Returns
+
+<ResponseField name="boolean" type="boolean">
+  `true` if source chain is Solana, `false` otherwise
+</ResponseField>
+
+### getPreset()
+
+Retrieves a specific auction preset.
+
+```typescript
+const preset = quote.getPreset(PresetEnum.fast)
+const auctionDuration = preset.auctionDuration
+```
+
+#### Parameters
+
+<ParamField path="type" type="PresetEnum">
+  Preset type (defaults to recommended preset)
+</ParamField>
+
+#### Returns
+
+<ResponseField name="Preset" type="Preset">
+  Preset object containing auction parameters
+</ResponseField>
+
+---
+
+## Usage Examples
+
+### Basic Quote to Order Flow
+
+```typescript
+import { SDK, HashLock, PresetEnum } from '@1inch/cross-chain-sdk'
+import { randomBytes } from 'crypto'
+
+// Get quote
+const quote = await sdk.getQuote({
+  srcChainId: 1,
+  dstChainId: 56,
+  srcTokenAddress: '0x...',
+  dstTokenAddress: '0x...',
+  amount: '1000000000000000000',
+  walletAddress: '0x...',
+  enableEstimate: true
+})
+
+// Create hash lock
+const secret = '0x' + randomBytes(32).toString('hex')
+const secretHash = HashLock.hashSecret(secret)
+const hashLock = HashLock.forSingleFill(secret)
+
+// Create order
+if (quote.isEvmQuote()) {
+  const order = quote.createEvmOrder({
+    hashLock,
+    receiver: EvmAddress.fromString('0x...'),
+    preset: PresetEnum.fast
+  })
+  
+  console.log('Order created:', order.getOrderHash(quote.srcChainId))
+}
+```
+
+### Multiple Fills Order
+
+```typescript
+import { randomBytes } from 'crypto'
+
+// Generate secrets for multiple fills
+const secrets = Array.from({ length: 3 }, () => 
+  '0x' + randomBytes(32).toString('hex')
+)
+
+const secretHashes = secrets.map(HashLock.hashSecret)
+const leaves = HashLock.getMerkleLeavesFromSecretHashes(secretHashes)
+const hashLock = HashLock.forMultipleFills(leaves)
+
+// Create order allowing multiple fills
+const order = quote.createEvmOrder({
+  hashLock,
+  receiver: EvmAddress.fromString('0x...'),
+  preset: PresetEnum.medium
+})
+```
+
+### Custom Preset
+
+```typescript
+// Get quote with custom auction parameters
+const quote = await sdk.getQuoteWithCustomPreset(
+  {
+    srcChainId: 1,
+    dstChainId: 56,
+    srcTokenAddress: '0x...',
+    dstTokenAddress: '0x...',
+    amount: '1000000000000000000',
+    walletAddress: '0x...',
+    enableEstimate: true
+  },
+  {
+    customPreset: {
+      auctionDuration: 300,
+      auctionStartAmount: '990000000000000000',
+      auctionEndAmount: '950000000000000000',
+      initialRateBump: 10000,
+      points: [
+        { delay: 30, coefficient: 9900 },
+        { delay: 120, coefficient: 9700 },
+        { delay: 240, coefficient: 9500 }
+      ]
+    }
+  }
+)
+
+// Use custom preset
+const order = quote.createEvmOrder({
+  hashLock,
+  preset: PresetEnum.custom
+})
+```
+
+### Checking Quote Properties
+
+```typescript
+console.log('Source amount:', quote.srcTokenAmount)
+console.log('Destination amount:', quote.dstTokenAmount)
+console.log('Recommended preset:', quote.recommendedPreset)
+console.log('Slippage:', quote.slippage)
+
+// Get preset details
+const preset = quote.getPreset()
+console.log('Auction duration:', preset.auctionDuration)
+console.log('Start amount:', preset.auctionStartAmount)
+console.log('End amount:', preset.auctionEndAmount)
+```

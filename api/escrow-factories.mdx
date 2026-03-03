@@ -1,0 +1,708 @@
+---
+title: "Escrow Factories"
+description: "Factory classes for creating and managing cross-chain escrow contracts"
+---
+
+## Overview
+
+Escrow factories are responsible for creating and managing escrow contracts on both source and destination chains. The SDK provides factory implementations for both EVM and Solana (SVM) networks.
+
+## EVM Escrow Factories
+
+### EscrowFactory
+
+The base factory class for EVM-based escrow contracts.
+
+```typescript
+import { EscrowFactory, EvmAddress } from '@1inch/cross-chain-sdk'
+
+const factory = new EscrowFactory(factoryAddress)
+```
+
+<ParamField path="address" type="EvmAddress" required>
+  The address of the escrow factory contract on the EVM chain
+</ParamField>
+
+### Methods
+
+#### getEscrowAddress
+
+Calculates the address of an escrow contract using CREATE2.
+
+```typescript
+const escrowAddress = factory.getEscrowAddress(
+  immutablesHash,
+  implementationAddress
+)
+```
+
+<ParamField path="immutablesHash" type="string" required>
+  The hash of immutables data (32 bytes hex string). See `Immutables.hash()`
+</ParamField>
+
+<ParamField path="implementationAddress" type="EvmAddress" required>
+  Address of the escrow implementation contract on the same chain
+</ParamField>
+
+**Returns:** `EvmAddress` - The escrow contract address
+
+#### getSrcEscrowAddress
+
+Calculates the source escrow address for given parameters.
+
+```typescript
+const srcEscrowAddress = factory.getSrcEscrowAddress(
+  srcImmutables,
+  implementationAddress
+)
+```
+
+<ParamField path="srcImmutables" type="Immutables<EvmAddress>" required>
+  Source immutables from `SrcEscrowCreated` event (with correct timeLock.deployedAt)
+</ParamField>
+
+<ParamField path="implementationAddress" type="EvmAddress" required>
+  Address of the escrow implementation contract
+</ParamField>
+
+**Returns:** `EvmAddress` - The source escrow address
+
+<Note>
+Make sure you call this method on the source chain escrow factory.
+</Note>
+
+#### getDstEscrowAddress
+
+Calculates the destination escrow address for given parameters.
+
+```typescript
+const dstEscrowAddress = factory.getDstEscrowAddress(
+  srcImmutables,
+  complement,
+  blockTime,
+  taker,
+  implementationAddress
+)
+```
+
+<ParamField path="srcImmutables" type="Immutables<EvmAddress>" required>
+  From `SrcEscrowCreated` event
+</ParamField>
+
+<ParamField path="complement" type="DstImmutablesComplement<EvmAddress>" required>
+  From `SrcEscrowCreated` event
+</ParamField>
+
+<ParamField path="blockTime" type="bigint" required>
+  Block timestamp when `DstEscrowCreated` event was produced
+</ParamField>
+
+<ParamField path="taker" type="EvmAddress" required>
+  Taker address from `DstEscrowCreated` event
+</ParamField>
+
+<ParamField path="implementationAddress" type="EvmAddress" required>
+  Address of the escrow implementation contract
+</ParamField>
+
+**Returns:** `EvmAddress` - The destination escrow address
+
+<Note>
+Make sure you call this method on the destination chain escrow factory.
+</Note>
+
+#### getMultipleFillInteraction
+
+Creates an interaction for orders that allow multiple fills (partial fills).
+
+```typescript
+import { HashLock } from '@1inch/cross-chain-sdk'
+
+const proof = hashLock.getProof(idx)
+const interaction = factory.getMultipleFillInteraction(
+  proof,
+  idx,
+  secretHash
+)
+```
+
+<ParamField path="proof" type="MerkleLeaf[]" required>
+  Merkle proof for the given index. See `HashLock.getProof()`
+</ParamField>
+
+<ParamField path="idx" type="number" required>
+  The index of the fill in the multiple fills merkle tree
+</ParamField>
+
+<ParamField path="secretHash" type="string" required>
+  Hash of the secret at the given index
+</ParamField>
+
+**Returns:** `Interaction` - An interaction object to be used with the order
+
+### EscrowFactoryFacade
+
+A facade wrapper for the EscrowFactory that provides backward compatibility.
+
+```typescript
+import { EscrowFactoryFacade, NetworkEnum } from '@1inch/cross-chain-sdk'
+
+const factory = new EscrowFactoryFacade(
+  NetworkEnum.ETHEREUM,
+  factoryAddress
+)
+```
+
+<ParamField path="chainId" type="NetworkEnum" required>
+  The chain ID (kept for backward compatibility)
+</ParamField>
+
+<ParamField path="factoryAddress" type="EvmAddress" required>
+  The address of the escrow factory contract
+</ParamField>
+
+## Solana Escrow Factories
+
+### SvmSrcEscrowFactory
+
+Factory for creating and managing source escrow contracts on Solana.
+
+```typescript
+import { SvmSrcEscrowFactory, SolanaAddress } from '@1inch/cross-chain-sdk'
+
+// Use the default factory
+const factory = SvmSrcEscrowFactory.DEFAULT
+
+// Or create a custom instance
+const customFactory = new SvmSrcEscrowFactory(programId)
+```
+
+**Default Program ID:** `2g4JDRMD7G3dK1PHmCnDAycKzd6e5sdhxqGBbs264zwz`
+
+### Methods
+
+#### getOrderAccount
+
+Get the order account PDA (Program Derived Address).
+
+```typescript
+const orderAccount = factory.getOrderAccount(orderHash)
+```
+
+<ParamField path="orderHash" type="Buffer" required>
+  The hash of the order
+</ParamField>
+
+**Returns:** `SolanaAddress` - The order account address
+
+#### getEscrowAddress
+
+Calculate the escrow PDA for given parameters.
+
+```typescript
+const escrowAddress = factory.getEscrowAddress({
+  orderHash,
+  hashLock,
+  taker,
+  amount
+})
+```
+
+<ParamField path="params" type="EscrowAddressParams" required>
+  Object containing:
+  - `orderHash`: Buffer - The order hash
+  - `hashLock`: HashLock - The hash lock
+  - `taker`: SolanaAddress - The taker address
+  - `amount`: bigint - The fill amount
+</ParamField>
+
+**Returns:** `SolanaAddress` - The escrow PDA
+
+#### createOrder
+
+Create an instruction to create a cross-chain order on Solana.
+
+```typescript
+const instruction = factory.createOrder(order, {
+  srcTokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID
+})
+```
+
+<ParamField path="order" type="SvmCrossChainOrder" required>
+  The Solana cross-chain order to create
+</ParamField>
+
+<ParamField path="extra.srcTokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to create the order
+
+#### createEscrow
+
+Create an instruction to create an escrow (fill an order).
+
+```typescript
+const instruction = factory.createEscrow(
+  immutables,
+  auction,
+  {
+    tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID,
+    merkleProof: order.multipleFillsAllowed ? {
+      proof: hashLock.getProof(idx),
+      idx,
+      secretHash: Buffer.from(HashLock.hashSecret(secrets[idx]).slice(2), 'hex')
+    } : undefined
+  }
+)
+```
+
+<ParamField path="immutables" type="ActionParams" required>
+  Immutable parameters including orderHash, hashLock, taker, maker, token, and amount
+</ParamField>
+
+<ParamField path="auction" type="AuctionDetails" required>
+  Dutch auction parameters for the fill
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.whitelistProgramId" type="SolanaAddress">
+  Whitelist program ID. Defaults to `WhitelistContract.DEFAULT`
+</ParamField>
+
+<ParamField path="extra.merkleProof" type="object">
+  Required if order allows partial fills:
+  - `proof`: MerkleLeaf[] - Merkle proof for index (see `HashLock.getProof()`)
+  - `idx`: number - Fill index (see `SvmCrossChainOrder.getMultipleFillIdx()`)
+  - `secretHash`: Buffer - Hash of secret at index
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to create the escrow
+
+#### withdrawPrivate
+
+Create an instruction to withdraw from escrow (private - by taker only).
+
+```typescript
+const instruction = factory.withdrawPrivate(
+  params,
+  secretBuffer,
+  { tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID }
+)
+```
+
+<ParamField path="params" type="ActionParams" required>
+  Escrow parameters (orderHash, hashLock, taker, maker, token, amount)
+</ParamField>
+
+<ParamField path="secret" type="Buffer" required>
+  The secret to unlock the escrow (32 bytes)
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to withdraw
+
+#### withdrawPublic
+
+Create an instruction to withdraw from escrow (public - by resolver).
+
+```typescript
+const instruction = factory.withdrawPublic(
+  params,
+  secretBuffer,
+  resolverAddress,
+  { tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID }
+)
+```
+
+<ParamField path="params" type="ActionParams" required>
+  Escrow parameters
+</ParamField>
+
+<ParamField path="secret" type="Buffer" required>
+  The secret to unlock the escrow
+</ParamField>
+
+<ParamField path="resolver" type="SolanaAddress" required>
+  The resolver address performing the withdrawal
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.whitelistProgramId" type="SolanaAddress">
+  Whitelist program ID. Defaults to `WhitelistContract.DEFAULT`
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to withdraw
+
+#### cancelPrivate
+
+Cancel an escrow fill (private - by taker only).
+
+```typescript
+const instruction = factory.cancelPrivate(params, {
+  tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID,
+  assetIsNative: false
+})
+```
+
+<ParamField path="params" type="ActionParams" required>
+  Escrow parameters
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.assetIsNative" type="boolean" required>
+  Whether the asset is native SOL (wrapped as WSOL)
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to cancel
+
+#### cancelPublic
+
+Cancel an escrow fill (public - by resolver).
+
+```typescript
+const instruction = factory.cancelPublic(
+  params,
+  payerAddress,
+  {
+    tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID,
+    assetIsNative: false
+  }
+)
+```
+
+<ParamField path="params" type="Immutables<SolanaAddress>" required>
+  Escrow immutables
+</ParamField>
+
+<ParamField path="payer" type="SolanaAddress" required>
+  The resolver address paying for the cancellation
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.assetIsNative" type="boolean" required>
+  Whether the asset is native SOL
+</ParamField>
+
+<ParamField path="extra.whitelistProgramId" type="SolanaAddress">
+  Whitelist program ID. Defaults to `WhitelistContract.DEFAULT`
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to cancel
+
+#### cancelOwnOrder
+
+Cancel an order by the maker.
+
+```typescript
+const instruction = factory.cancelOwnOrder(
+  { orderHash, maker, token },
+  {
+    tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID,
+    assetIsNative: false
+  }
+)
+```
+
+<ParamField path="params" type="object" required>
+  - `orderHash`: Buffer - The order hash
+  - `maker`: SolanaAddress - The maker address
+  - `token`: SolanaAddress - The token address
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.assetIsNative" type="boolean" required>
+  Whether the asset is native SOL
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to cancel order
+
+#### cancelOrderByResolver
+
+Cancel an order by a resolver (during cancellation auction).
+
+```typescript
+const instruction = factory.cancelOrderByResolver(
+  {
+    orderHash,
+    resolver,
+    maker,
+    token,
+    rewardLimit: 1000000n // max reward in lamports
+  },
+  {
+    tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID,
+    assetIsNative: false
+  }
+)
+```
+
+<ParamField path="params.orderHash" type="Buffer" required>
+  The order hash
+</ParamField>
+
+<ParamField path="params.resolver" type="SolanaAddress" required>
+  The resolver address
+</ParamField>
+
+<ParamField path="params.maker" type="SolanaAddress" required>
+  The maker address
+</ParamField>
+
+<ParamField path="params.token" type="SolanaAddress" required>
+  The token address
+</ParamField>
+
+<ParamField path="params.rewardLimit" type="bigint" required>
+  Max reward resolver is willing to take. Real reward will be `min(cancellationPremium, rewardLimit)`
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.assetIsNative" type="boolean" required>
+  Whether the asset is native SOL
+</ParamField>
+
+<ParamField path="extra.whitelistProgram" type="WhitelistContract">
+  Whitelist contract for resolver access validation
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to cancel order
+
+### SvmDstEscrowFactory
+
+Factory for creating and managing destination escrow contracts on Solana.
+
+```typescript
+import { SvmDstEscrowFactory, SolanaAddress } from '@1inch/cross-chain-sdk'
+
+// Use the default factory
+const factory = SvmDstEscrowFactory.DEFAULT
+
+// Or create a custom instance
+const customFactory = new SvmDstEscrowFactory(programId)
+```
+
+**Default Program ID:** `GveV3ToLhvRmeq1Fyg3BMkNetZuG9pZEp4uBGWLrTjve`
+
+### Methods
+
+#### getEscrowAddress
+
+Calculate the escrow PDA for given parameters.
+
+```typescript
+const escrowAddress = factory.getEscrowAddress({
+  orderHash,
+  hashLock,
+  taker,
+  amount
+})
+```
+
+<ParamField path="params" type="EscrowAddressParams" required>
+  Same as SvmSrcEscrowFactory
+</ParamField>
+
+**Returns:** `SolanaAddress` - The escrow PDA
+
+#### createEscrow
+
+Create an instruction to create a destination escrow.
+
+```typescript
+const instruction = factory.createEscrow(
+  params,
+  {
+    tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID,
+    srcCancellationTimestamp: 1234567890n
+  }
+)
+```
+
+<ParamField path="params" type="Immutables<SolanaAddress>" required>
+  Immutable escrow parameters
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.srcCancellationTimestamp" type="bigint" required>
+  Source chain cancellation timestamp
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to create the escrow
+
+<Note>
+The `createEscrow`, `withdrawPrivate`, `withdrawPublic`, and `cancelPrivate` methods automatically handle native SOL by using WSOL (Wrapped SOL) internally. The `assetIsNative` flag in the instruction data tracks this.
+</Note>
+
+#### withdrawPrivate
+
+Withdraw from destination escrow (private).
+
+```typescript
+const instruction = factory.withdrawPrivate(
+  params,
+  secretBuffer,
+  { tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID }
+)
+```
+
+<ParamField path="params" type="Immutables<SolanaAddress>" required>
+  Escrow immutables
+</ParamField>
+
+<ParamField path="secret" type="Buffer" required>
+  The secret to unlock the escrow
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to withdraw
+
+#### withdrawPublic
+
+Withdraw from destination escrow (public - by resolver).
+
+```typescript
+const instruction = factory.withdrawPublic(
+  params,
+  secretBuffer,
+  payerAddress,
+  { tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID }
+)
+```
+
+<ParamField path="params" type="Immutables<SolanaAddress>" required>
+  Escrow immutables
+</ParamField>
+
+<ParamField path="secret" type="Buffer" required>
+  The secret to unlock the escrow
+</ParamField>
+
+<ParamField path="payer" type="SolanaAddress" required>
+  The resolver address
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+<ParamField path="extra.whitelistProgramId" type="SolanaAddress">
+  Whitelist program ID. Defaults to `WhitelistContract.DEFAULT`
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to withdraw
+
+#### cancelPrivate
+
+Cancel a destination escrow (private).
+
+```typescript
+const instruction = factory.cancelPrivate(params, {
+  tokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID
+})
+```
+
+<ParamField path="params" type="Immutables<SolanaAddress>" required>
+  Escrow immutables
+</ParamField>
+
+<ParamField path="extra.tokenProgramId" type="SolanaAddress" required>
+  Token Program ID or Token Program 2022 ID
+</ParamField>
+
+**Returns:** `Instruction` - Solana instruction to cancel
+
+## Static Parsing Methods
+
+Both SVM factories provide static methods to parse on-chain instructions:
+
+### SvmSrcEscrowFactory
+
+```typescript
+// Parse create order instruction
+const parsed = SvmSrcEscrowFactory.parseCreateInstruction(instruction)
+
+// Parse create escrow instruction
+const escrowData = SvmSrcEscrowFactory.parseCreateEscrowInstruction(instruction)
+
+// Parse withdraw instructions
+const { secret } = SvmSrcEscrowFactory.parsePrivateWithdrawInstruction(instruction)
+const { secret } = SvmSrcEscrowFactory.parsePublicWithdrawInstruction(instruction)
+```
+
+### SvmDstEscrowFactory
+
+```typescript
+// Parse create escrow instruction
+const escrowData = SvmDstEscrowFactory.parseCreateEscrowInstruction(instruction)
+
+// Parse withdraw instructions
+const { secret } = SvmDstEscrowFactory.parsePrivateWithdrawInstruction(instruction)
+const { secret } = SvmDstEscrowFactory.parsePublicWithdrawInstruction(instruction)
+```
+
+## Example: Solana Order Creation
+
+```typescript
+import {
+  SvmSrcEscrowFactory,
+  SolanaAddress,
+  HashLock
+} from '@1inch/cross-chain-sdk'
+import { web3 } from '@coral-xyz/anchor'
+
+// Create the factory
+const factory = SvmSrcEscrowFactory.DEFAULT
+
+// Create order instruction
+const instruction = factory.createOrder(order, {
+  srcTokenProgramId: SolanaAddress.TOKEN_PROGRAM_ID
+})
+
+// Build and send transaction
+const tx = new web3.Transaction().add({
+  data: instruction.data,
+  programId: new web3.PublicKey(instruction.programId.toBuffer()),
+  keys: instruction.accounts.map((a) => ({
+    isSigner: a.isSigner,
+    isWritable: a.isWritable,
+    pubkey: new web3.PublicKey(a.pubkey.toBuffer())
+  }))
+})
+
+const connection = new web3.Connection(rpcUrl)
+const result = await connection.sendTransaction(tx, [makerSigner])
+```
+
+## See Also
+
+- [NativeOrdersFactory](/api/native-orders) - Creating native asset orders
+- [Orders](/api/evm-order) - Cross-chain order objects
+- [HashLock](/api/hash-lock) - Hash lock and secret management
